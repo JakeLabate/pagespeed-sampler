@@ -1,0 +1,1219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PageSpeed Sampler</title>
+<meta name="description" content="Discover a site's sitemap, sample up to 10 URLs per collection type, measure each with the Google PageSpeed Insights API, and report averages.">
+<style>
+:root{
+  color-scheme: light;
+  --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ed; --surface-3:#e9e8e3;
+  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+  --good-ink:#006300; --critical-ink:#b02c2c;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
+  --accent:#2a78d6; --accent-ink:#fff;
+  --shadow:0 1px 2px rgba(11,11,11,.05), 0 8px 24px rgba(11,11,11,.05);
+}
+@media (prefers-color-scheme: dark){
+  :root:where(:not([data-theme="light"])){
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232322; --surface-3:#2c2c2a;
+    --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+    --good-ink:#0ca30c; --critical-ink:#e06a6a;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+    --accent:#3987e5;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232322; --surface-3:#2c2c2a;
+  --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+  --good-ink:#0ca30c; --critical-ink:#e06a6a;
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70;
+  --accent:#3987e5;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--plane); color:var(--ink);
+  font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px;margin:0 auto;padding:24px 20px 96px}
+a{color:var(--accent)}
+h1,h2,h3{margin:0;font-weight:640;letter-spacing:-.01em}
+h1{font-size:22px}
+h2{font-size:16px}
+h3{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-2);font-weight:620}
+p{margin:0}
+.mono{font-variant-numeric:tabular-nums}
+
+header.top{display:flex;align-items:flex-start;gap:16px;margin-bottom:22px}
+header.top .grow{flex:1;min-width:0}
+.sub{color:var(--ink-2);font-size:13px;margin-top:5px;max-width:70ch}
+.iconbtn{background:var(--surface);border:1px solid var(--ring);color:var(--ink-2);border-radius:9px;padding:7px 11px;cursor:pointer;font:inherit;font-size:13px}
+.iconbtn:hover{background:var(--surface-2)}
+
+.card{background:var(--surface);border:1px solid var(--ring);border-radius:14px;padding:18px;margin-bottom:16px;box-shadow:var(--shadow)}
+.card > .hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.card > .hd .grow{flex:1}
+.step{width:22px;height:22px;flex:none;border-radius:6px;background:var(--surface-3);color:var(--ink-2);display:grid;place-items:center;font-size:11px;font-weight:700}
+
+label.f{display:block;font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:5px}
+input[type=text],input[type=url],input[type=password],input[type=number],select,textarea{
+  width:100%;background:var(--plane);color:var(--ink);border:1px solid var(--ring);
+  border-radius:9px;padding:9px 11px;font:inherit;font-size:13.5px;
+}
+textarea{min-height:84px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+.row{display:grid;gap:12px}
+@media(min-width:720px){.row.c2{grid-template-columns:1fr 1fr}.row.c3{grid-template-columns:1fr 1fr 1fr}.row.c4{grid-template-columns:repeat(4,1fr)}}
+.hint{font-size:11.5px;color:var(--muted);margin-top:5px}
+
+.btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:9px;padding:10px 18px;font:inherit;font-weight:620;font-size:13.5px;cursor:pointer}
+.btn:hover{filter:brightness(1.07)}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.btn.ghost{background:var(--surface-2);color:var(--ink);border:1px solid var(--ring)}
+.btn.sm{padding:6px 12px;font-size:12.5px}
+.btnrow{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+
+.chk{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink-2);cursor:pointer;user-select:none}
+.chk input{accent-color:var(--accent);width:15px;height:15px;margin:0}
+
+details.adv{margin-top:14px;border-top:1px solid var(--grid);padding-top:12px}
+details.adv summary{cursor:pointer;font-size:12.5px;color:var(--ink-2);font-weight:600;list-style:none}
+details.adv summary::-webkit-details-marker{display:none}
+details.adv summary:before{content:"▸ ";color:var(--muted)}
+details.adv[open] summary:before{content:"▾ "}
+details.adv .body{padding-top:14px}
+
+.log{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.65;
+  background:var(--plane);border:1px solid var(--grid);border-radius:9px;padding:10px 12px;
+  max-height:190px;overflow:auto;white-space:pre-wrap;word-break:break-all;color:var(--ink-2)}
+.log .ok{color:var(--good-ink);font-weight:600}
+.log .bad{color:var(--critical-ink)}
+.log .dim{color:var(--muted)}
+
+.pillbar{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:12px}
+.pill{background:var(--surface-2);border:1px solid var(--ring);border-radius:999px;padding:4px 11px;font-size:12px;color:var(--ink-2)}
+.pill b{color:var(--ink);font-weight:640}
+
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{text-align:left;font-weight:620;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
+  color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--axis);white-space:nowrap}
+th.n,td.n{text-align:right;font-variant-numeric:tabular-nums}
+td{padding:9px 10px;border-bottom:1px solid var(--grid);vertical-align:middle}
+tbody tr:hover{background:var(--surface-2)}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--ink)}
+th.sortable[data-dir]:after{content:" ↓";color:var(--accent)}
+th.sortable[data-dir="asc"]:after{content:" ↑";color:var(--accent)}
+.tablewrap{overflow-x:auto;border:1px solid var(--grid);border-radius:11px;background:var(--surface)}
+.tablewrap table{min-width:760px}
+.urlcell{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.urlcell a{text-decoration:none}
+.urlcell a:hover{text-decoration:underline}
+.tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:1.5px 6px;border-radius:5px;background:var(--surface-3);color:var(--ink-2);margin-left:6px;vertical-align:1px}
+.tag.key{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
+
+/* stat tiles */
+.tiles{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));margin-bottom:16px}
+.tile{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 15px 13px}
+.tile .lbl{font-size:11px;font-weight:640;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+.tile .val{font-size:30px;font-weight:660;letter-spacing:-.025em;margin:5px 0 2px;line-height:1.05}
+.tile .val small{font-size:14px;font-weight:600;color:var(--ink-2);letter-spacing:0}
+.tile .meta{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.meter{height:6px;border-radius:3px;background:var(--surface-3);overflow:hidden;margin:9px 0 8px}
+.meter > i{display:block;height:100%;border-radius:3px;background:var(--axis)}
+.st{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:640}
+.st .dot{width:8px;height:8px;border-radius:2.5px;flex:none}
+.st.good{color:var(--good-ink)} .st.good .dot{background:var(--good)}
+.st.ni{color:var(--ink-2)} .st.ni .dot{background:var(--warning)}
+.st.poor{color:var(--critical-ink)} .st.poor .dot{background:var(--critical)}
+.st.na{color:var(--muted)} .st.na .dot{background:var(--axis)}
+
+.scorecell{display:inline-flex;align-items:center;gap:7px;font-variant-numeric:tabular-nums;font-weight:640}
+.scorecell .dot{width:9px;height:9px;border-radius:3px;flex:none}
+.g-good{background:var(--good)} .g-ni{background:var(--warning)} .g-poor{background:var(--critical)} .g-na{background:var(--axis)}
+
+.bar{position:relative;height:8px;border-radius:4px;background:var(--surface-3);overflow:hidden;min-width:70px}
+.bar > i{position:absolute;left:0;top:0;bottom:0;border-radius:4px}
+
+.progress{height:8px;border-radius:4px;background:var(--surface-3);overflow:hidden;margin:12px 0 8px}
+.progress > i{display:block;height:100%;background:var(--accent);border-radius:4px;transition:width .25s ease;width:0}
+.prognote{font-size:12px;color:var(--ink-2);font-variant-numeric:tabular-nums}
+
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);margin:2px 0 12px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:9px;height:9px;border-radius:3px;display:inline-block}
+
+.empty{color:var(--muted);font-size:13px;padding:22px 4px;text-align:center}
+.err{background:color-mix(in srgb,var(--critical) 10%,transparent);border:1px solid color-mix(in srgb,var(--critical) 32%,transparent);
+  color:var(--critical-ink);border-radius:9px;padding:10px 12px;font-size:12.5px;margin-top:12px}
+.note{background:var(--surface-2);border:1px solid var(--grid);border-radius:9px;padding:10px 12px;font-size:12.5px;color:var(--ink-2);margin-top:12px}
+.hidden{display:none !important}
+.grouphd{font-weight:640;font-size:13px}
+.sel-list{max-height:420px;overflow:auto;border:1px solid var(--grid);border-radius:11px}
+.sel-group{border-bottom:1px solid var(--grid)}
+.sel-group:last-child{border-bottom:0}
+.sel-group > .gh{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--surface-2);position:sticky;top:0;z-index:1}
+.sel-group > .gh .grow{flex:1;min-width:0}
+.sel-item{display:flex;align-items:center;gap:10px;padding:6px 12px 6px 26px;font-size:12.5px;border-top:1px solid var(--grid)}
+.sel-item .u{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.sel-item.picked .u{color:var(--ink)}
+footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="grow">
+    <h1>PageSpeed Sampler</h1>
+    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Runs entirely in your browser.</p>
+  </div>
+  <button class="iconbtn" id="themeBtn" type="button" aria-label="Toggle theme">Theme</button>
+</header>
+
+<!-- 1. SETUP -->
+<section class="card">
+  <div class="hd"><span class="step">1</span><h2 class="grow">Setup</h2></div>
+  <div class="row c2">
+    <div>
+      <label class="f" for="site">Site URL</label>
+      <input type="url" id="site" placeholder="https://example.com" spellcheck="false" autocomplete="url">
+      <div class="hint">Domain or any page on the site. The sitemap is looked up from its origin.</div>
+    </div>
+    <div>
+      <label class="f" for="key">PageSpeed Insights API key</label>
+      <input type="password" id="key" placeholder="AIza..." spellcheck="false" autocomplete="off">
+      <div class="hint">Stored only in this browser. <a href="https://developers.google.com/speed/docs/insights/v5/get-started#key" target="_blank" rel="noopener">Get a free key</a>. Without one Google throttles hard and most runs fail.</div>
+    </div>
+  </div>
+
+  <details class="adv">
+    <summary>Sampling and run options</summary>
+    <div class="body">
+      <div class="row c4">
+        <div>
+          <label class="f" for="perGroup">Max URLs per collection</label>
+          <input type="number" id="perGroup" value="10" min="1" max="10">
+        </div>
+        <div>
+          <label class="f" for="totalCap">Max URLs total</label>
+          <input type="number" id="totalCap" value="100" min="1" max="100">
+        </div>
+        <div>
+          <label class="f" for="conc">Parallel requests</label>
+          <input type="number" id="conc" value="4" min="1" max="8">
+        </div>
+        <div>
+          <label class="f" for="maxChild">Max child sitemaps</label>
+          <input type="number" id="maxChild" value="30" min="1" max="100">
+        </div>
+      </div>
+      <div class="row c3" style="margin-top:12px">
+        <div>
+          <label class="f">Strategy</label>
+          <div style="display:flex;gap:16px;padding-top:5px">
+            <label class="chk"><input type="checkbox" id="stMobile" checked> Mobile</label>
+            <label class="chk"><input type="checkbox" id="stDesktop" checked> Desktop</label>
+          </div>
+          <div class="hint">Both means two API calls per URL.</div>
+        </div>
+        <div>
+          <label class="f">Extra Lighthouse categories</label>
+          <div style="padding-top:5px"><label class="chk"><input type="checkbox" id="allCats"> Accessibility, best practices, SEO</label></div>
+          <div class="hint">Slower per URL. Performance is always measured.</div>
+        </div>
+        <div>
+          <label class="f">Sitemap fetch</label>
+          <div style="padding-top:5px"><label class="chk"><input type="checkbox" id="useProxy" checked> Allow public CORS proxies</label></div>
+          <div class="hint">Direct fetch is tried first; proxies only if the site blocks it.</div>
+        </div>
+      </div>
+      <div style="margin-top:14px">
+        <label class="f" for="manual">Manual URL list (fallback or addition)</label>
+        <textarea id="manual" placeholder="https://example.com/&#10;https://example.com/about&#10;https://example.com/contact" spellcheck="false"></textarea>
+        <div class="hint">One URL per line. Used on its own if discovery fails, or merged in if discovery works.</div>
+      </div>
+    </div>
+  </details>
+
+  <div class="btnrow" style="margin-top:16px">
+    <button class="btn" id="discoverBtn" type="button">Find sitemap and sample URLs</button>
+    <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
+  </div>
+  <div id="setupErr"></div>
+</section>
+
+<!-- 2. DISCOVERY -->
+<section class="card hidden" id="discCard">
+  <div class="hd"><span class="step">2</span><h2 class="grow">Discovery</h2>
+    <span class="pill" id="discStat"></span>
+  </div>
+  <div class="log" id="discLog"></div>
+  <div id="discSummary"></div>
+</section>
+
+<!-- 3. SELECTION -->
+<section class="card hidden" id="selCard">
+  <div class="hd"><span class="step">3</span><h2 class="grow">Sample</h2>
+    <div class="btnrow">
+      <button class="btn ghost sm" id="reSample" type="button">Re-sample</button>
+      <button class="btn ghost sm" id="selNone" type="button">Clear all</button>
+    </div>
+  </div>
+  <div class="pillbar" id="selPills"></div>
+  <div class="sel-list" id="selList"></div>
+  <div class="btnrow" style="margin-top:16px">
+    <button class="btn" id="runBtn" type="button">Run PageSpeed test</button>
+    <button class="btn ghost" id="stopBtn" type="button" disabled>Stop</button>
+    <span class="prognote" id="runNote"></span>
+  </div>
+  <div class="progress hidden" id="progWrap"><i id="progBar"></i></div>
+  <div id="runErr"></div>
+</section>
+
+<!-- 4. RESULTS -->
+<section class="card hidden" id="resCard">
+  <div class="hd"><span class="step">4</span><h2 class="grow">Results</h2>
+    <div class="btnrow">
+      <select id="resStrategy" style="width:auto"></select>
+      <button class="btn ghost sm" id="dlCsv" type="button">CSV</button>
+      <button class="btn ghost sm" id="dlJson" type="button">JSON</button>
+    </div>
+  </div>
+  <div id="resBody"></div>
+</section>
+
+<footer>
+  <span>Front end only. Nothing is sent anywhere except Google's PageSpeed Insights API and, if a site blocks direct sitemap access, a public CORS proxy.</span>
+  <a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+</footer>
+
+</div>
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------- helpers */
+const $ = s => document.querySelector(s);
+const el = (tag, cls, txt) => { const n = document.createElement(tag); if(cls) n.className = cls; if(txt != null) n.textContent = txt; return n; };
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const uniq = a => Array.from(new Set(a));
+
+/* theme */
+(function themeInit(){
+  const saved = localStorage.getItem('pss.theme');
+  if(saved) document.documentElement.setAttribute('data-theme', saved);
+  $('#themeBtn').addEventListener('click', () => {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const sysDark = matchMedia('(prefers-color-scheme: dark)').matches;
+    const next = cur ? (cur === 'dark' ? 'light' : 'dark') : (sysDark ? 'light' : 'dark');
+    document.documentElement.setAttribute('data-theme', next);
+    localStorage.setItem('pss.theme', next);
+  });
+})();
+
+/* persisted fields */
+const PERSIST = ['#site','#key','#perGroup','#totalCap','#conc','#maxChild'];
+PERSIST.forEach(sel => {
+  const n = $(sel), k = 'pss' + sel;
+  const v = localStorage.getItem(k); if(v !== null) n.value = v;
+  n.addEventListener('change', () => localStorage.setItem(k, n.value));
+});
+['#stMobile','#stDesktop','#allCats','#useProxy'].forEach(sel => {
+  const n = $(sel), k = 'pss' + sel;
+  const v = localStorage.getItem(k); if(v !== null) n.checked = v === '1';
+  n.addEventListener('change', () => localStorage.setItem(k, n.checked ? '1' : '0'));
+});
+
+/* ------------------------------------------------------- metric thresholds */
+/* Core Web Vitals + Lighthouse thresholds. good = at or better; ni = needs improvement bound. */
+const METRICS = {
+  perf: { label:'Performance', unit:'score', good:90, ni:50, higher:true, max:100 },
+  lcp:  { label:'LCP',  unit:'ms', good:2500, ni:4000, max:8000 },
+  cls:  { label:'CLS',  unit:'num', good:0.10, ni:0.25, max:0.5 },
+  tbt:  { label:'TBT',  unit:'ms', good:200,  ni:600,  max:2000 },
+  inp:  { label:'INP',  unit:'ms', good:200,  ni:500,  max:1000 },
+  fcp:  { label:'FCP',  unit:'ms', good:1800, ni:3000, max:6000 },
+  si:   { label:'Speed Index', unit:'ms', good:3400, ni:5800, max:10000 },
+  ttfb: { label:'TTFB', unit:'ms', good:800,  ni:1800, max:4000 },
+  a11y: { label:'Accessibility', unit:'score', good:90, ni:50, higher:true, max:100 },
+  bp:   { label:'Best practices', unit:'score', good:90, ni:50, higher:true, max:100 },
+  seo:  { label:'SEO', unit:'score', good:90, ni:50, higher:true, max:100 }
+};
+function grade(metric, v){
+  const m = METRICS[metric];
+  if(v == null || !isFinite(v) || !m) return 'na';
+  if(m.higher) return v >= m.good ? 'good' : (v >= m.ni ? 'ni' : 'poor');
+  return v <= m.good ? 'good' : (v <= m.ni ? 'ni' : 'poor');
+}
+const GRADE_LABEL = { good:'Good', ni:'Needs work', poor:'Poor', na:'No data' };
+function fmt(metric, v){
+  if(v == null || !isFinite(v)) return '–';
+  const m = METRICS[metric];
+  if(!m) return String(v);
+  if(m.unit === 'score') return String(Math.round(v));
+  if(m.unit === 'num') return v.toFixed(3);
+  return v >= 1000 ? (v/1000).toFixed(2) + ' s' : Math.round(v) + ' ms';
+}
+function statusHTML(metric, v){
+  const g = grade(metric, v);
+  return '<span class="st ' + g + '"><span class="dot"></span>' + GRADE_LABEL[g] + '</span>';
+}
+function scoreCell(metric, v){
+  const g = grade(metric, v);
+  return '<span class="scorecell"><span class="dot g-' + g + '"></span>' + fmt(metric, v) +
+         '<span class="sr" style="position:absolute;left:-9999px">' + GRADE_LABEL[g] + '</span></span>';
+}
+const mean = a => { const v = a.filter(x => x != null && isFinite(x)); return v.length ? v.reduce((s,x)=>s+x,0)/v.length : null; };
+const median = a => { const v = a.filter(x => x != null && isFinite(x)).sort((x,y)=>x-y); if(!v.length) return null;
+  const h = Math.floor(v.length/2); return v.length % 2 ? v[h] : (v[h-1]+v[h])/2; };
+
+/* --------------------------------------------------------------- fetching */
+const PROXIES = [
+  { name:'direct',     url: u => u },
+  { name:'allorigins', url: u => 'https://api.allorigins.win/raw?url=' + encodeURIComponent(u) },
+  { name:'codetabs',   url: u => 'https://api.codetabs.com/v1/proxy/?quest=' + encodeURIComponent(u) },
+  { name:'corsproxy',  url: u => 'https://corsproxy.io/?url=' + encodeURIComponent(u) },
+  { name:'isomorphic', url: u => 'https://cors.isomorphic-git.org/' + u },
+  { name:'thingproxy', url: u => 'https://thingproxy.freeboard.io/fetch/' + u }
+];
+let transport = null;   // the PROXIES entry that works for this site
+
+async function rawFetch(target, timeout){
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeout);
+  try{
+    const r = await fetch(target, { signal: ctrl.signal, redirect:'follow',
+      headers:{ 'Accept':'text/plain, application/xml, text/xml, */*' } });
+    clearTimeout(t);
+    if(!r.ok) return { ok:false, why:'HTTP ' + r.status, status:r.status };
+    const text = await r.text();
+    return { ok:true, text };
+  }catch(e){
+    clearTimeout(t);
+    return { ok:false, why: e.name === 'AbortError' ? 'timeout' : (e.message || 'blocked') };
+  }
+}
+
+/* One up-front probe decides which transport this site needs, so we never pay
+   the full proxy fallback chain on every one of the candidate sitemap paths. */
+async function probeTransport(origin, allowProxy, log){
+  const targets = [origin + '/robots.txt', origin + '/'];
+  const cands = PROXIES.filter(p => p.name === 'direct' || allowProxy);
+  for(const t of targets){
+    for(const p of cands){
+      const r = await rawFetch(p.url(t), 10000);
+      if(r.ok && r.text != null){
+        transport = p;
+        logLine(log, 'Transport: ' + (p.name === 'direct'
+          ? 'direct browser fetch (site sends CORS headers)'
+          : 'public proxy "' + p.name + '" (site blocks direct browser fetch)'), 'ok');
+        return p;
+      }
+    }
+  }
+  transport = null;
+  logLine(log, 'No transport could reach ' + origin + (allowProxy ? '' : ' (proxies are disabled)'), 'bad');
+  return null;
+}
+
+async function fetchText(url, { timeout = 20000 } = {}){
+  if(transport){
+    const r = await rawFetch(transport.url(url), timeout);
+    if(r.ok && r.text && r.text.length > 8) return { text: r.text, via: transport.name };
+    // one silent retry through the other transports, in case this file alone is blocked
+    for(const p of PROXIES){
+      if(p === transport) continue;
+      const r2 = await rawFetch(p.url(url), timeout);
+      if(r2.ok && r2.text && r2.text.length > 8){ return { text: r2.text, via: p.name }; }
+    }
+    throw new Error(r.why || 'unreachable');
+  }
+  const r = await rawFetch(url, timeout);
+  if(r.ok && r.text) return { text: r.text, via: 'direct' };
+  throw new Error(r.why || 'unreachable');
+}
+
+async function mapLimit(items, limit, fn){
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while(true){
+      const idx = i++;
+      if(idx >= items.length) return;
+      out[idx] = await fn(items[idx], idx);
+    }
+  }));
+  return out;
+}
+
+/* ------------------------------------------------------ sitemap discovery */
+const SITEMAP_PATHS = [
+  '/sitemap.xml', '/sitemap_index.xml', '/sitemap-index.xml', '/sitemap/sitemap.xml',
+  '/wp-sitemap.xml', '/sitemap-0.xml', '/sitemap1.xml', '/sitemaps/sitemap.xml',
+  '/sitemap/index.xml', '/sitemap.php', '/sitemap.txt', '/sitemapindex.xml',
+  '/page-sitemap.xml', '/post-sitemap.xml', '/product-sitemap.xml',
+  '/sitemap/', '/sitemap-pages.xml', '/sitemap_pages.xml', '/xmlsitemap.xml',
+  '/sitemap/sitemap-index.xml', '/api/sitemap.xml', '/server-sitemap.xml'
+];
+const KEY_PATTERNS = [
+  [/^\/?$/, 'home'], [/^\/(index|home)(\.html?|\/)?$/i, 'home'],
+  [/\/about(-us)?\b/i, 'about'], [/\/contact(-us)?\b/i, 'contact'],
+  [/\/(services?|what-we-do)\b/i, 'services'], [/\/pricing\b/i, 'pricing'],
+  [/\/(products?|shop|store|collections)\/?$/i, 'products'], [/\/blog\/?$/i, 'blog'],
+  [/\/faqs?\b/i, 'faq'], [/\/(team|our-team|people|staff)\b/i, 'team'],
+  [/\/(careers?|jobs)\b/i, 'careers'], [/\/(locations?|store-locator|find-us)\b/i, 'locations'],
+  [/\/(case-stud|portfolio|work|projects)/i, 'work'], [/\/(testimonials|reviews)\b/i, 'reviews'],
+  [/\/privacy/i, 'privacy'], [/\/terms/i, 'terms'], [/\/(resources|guides|library)\/?$/i, 'resources']
+];
+function keyPageType(u){
+  let p;
+  try{ p = new URL(u).pathname; }catch(e){ return null; }
+  const clean = p.replace(/\/+$/, '') || '/';
+  for(const [re, name] of KEY_PATTERNS){ if(re.test(clean === '/' ? '/' : clean)) return name; }
+  return null;
+}
+
+function logLine(node, text, cls){
+  const s = el('span', cls || '', text + '\n');
+  node.appendChild(s); node.scrollTop = node.scrollHeight;
+}
+
+function parseSitemap(text, baseUrl){
+  const out = { urls: [], children: [], kind: 'unknown' };
+  const trimmed = text.trim();
+  if(!trimmed.startsWith('<')){
+    // plain text sitemap
+    const lines = trimmed.split(/\r?\n/).map(s => s.trim()).filter(s => /^https?:\/\//i.test(s));
+    if(lines.length){ out.kind = 'text'; out.urls = lines.map(loc => ({ loc })); }
+    return out;
+  }
+  let doc;
+  try{ doc = new DOMParser().parseFromString(trimmed, 'application/xml'); }catch(e){ return out; }
+  if(doc.querySelector('parsererror')) {
+    try{ doc = new DOMParser().parseFromString(trimmed, 'text/html'); }catch(e){ return out; }
+  }
+  const smNodes = doc.getElementsByTagName('sitemap');
+  if(smNodes.length){
+    out.kind = 'index';
+    for(const n of smNodes){
+      const loc = n.getElementsByTagName('loc')[0];
+      if(loc && loc.textContent.trim()) out.children.push(loc.textContent.trim());
+    }
+    if(out.children.length) return out;
+  }
+  const urlNodes = doc.getElementsByTagName('url');
+  if(urlNodes.length){
+    out.kind = 'urlset';
+    for(const n of urlNodes){
+      const loc = n.getElementsByTagName('loc')[0];
+      if(!loc || !loc.textContent.trim()) continue;
+      const lm = n.getElementsByTagName('lastmod')[0];
+      out.urls.push({ loc: loc.textContent.trim(), lastmod: lm ? lm.textContent.trim() : null });
+    }
+    return out;
+  }
+  // last resort: any <loc>
+  const locs = doc.getElementsByTagName('loc');
+  if(locs.length){
+    out.kind = 'loose';
+    for(const n of locs){ const v = n.textContent.trim(); if(v) out.urls.push({ loc: v }); }
+  }
+  return out;
+}
+
+async function discover(origin, opts, log){
+  const found = [];
+  const seenSitemaps = new Set();
+  const roots = [];
+
+  const tp = await probeTransport(origin, opts.allowProxy, log);
+  if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true };
+
+  // 1. robots.txt is authoritative when it declares a sitemap
+  logLine(log, 'GET /robots.txt', 'dim');
+  try{
+    const r = await fetchText(origin + '/robots.txt', { timeout: 15000 });
+    const decl = uniq((r.text.match(/^[^\S\n]*sitemap[^\S\n]*:[^\n]+/gim) || [])
+      .map(l => l.replace(/^[^\S\n]*sitemap[^\S\n]*:[^\S\n]*/i, '').trim())
+      .filter(v => /^https?:\/\//i.test(v)));
+    if(decl.length){
+      logLine(log, '  declares ' + decl.length + ' sitemap' + (decl.length>1?'s':''), 'ok');
+      decl.forEach(d => { logLine(log, '    ' + d, 'dim'); roots.push(d); });
+    } else {
+      logLine(log, '  found, but no Sitemap directive', 'dim');
+    }
+  }catch(e){ logLine(log, '  unavailable (' + e.message + ')', 'dim'); }
+
+  // 2. fall back to the common path list, probed in parallel
+  if(!roots.length){
+    logLine(log, 'Probing ' + SITEMAP_PATHS.length + ' common sitemap paths…', 'dim');
+    const hits = await mapLimit(SITEMAP_PATHS, 6, async path => {
+      try{
+        const r = await fetchText(origin + path, { timeout: 12000 });
+        const parsed = parseSitemap(r.text, origin + path);
+        if(parsed.kind !== 'unknown' && (parsed.urls.length || parsed.children.length)) return { path, parsed };
+      }catch(e){}
+      return null;
+    });
+    hits.forEach((h, i) => {
+      if(h) logLine(log, '  HIT  ' + h.path + '  (' + h.parsed.kind + ', ' +
+        (h.parsed.children.length ? h.parsed.children.length + ' child sitemaps' : h.parsed.urls.length + ' URLs') + ')', 'ok');
+      else logLine(log, '  miss ' + SITEMAP_PATHS[i], 'dim');
+    });
+    const real = hits.filter(Boolean);
+    // prefer an index over a leaf urlset, then the shallowest path
+    real.sort((a,b) => (b.parsed.children.length - a.parsed.children.length) || (a.path.length - b.path.length));
+    if(real.length) roots.push(origin + real[0].path);
+  }
+
+  if(!roots.length) return { urls: [], sitemaps: [], ok: false };
+
+  // 3. walk index -> children, breadth first, in parallel
+  let queue = roots.slice();
+  const walked = [];
+  let depth = 0;
+  while(queue.length && walked.length < opts.maxChild && depth < 5){
+    depth++;
+    const batch = queue.filter(u => !seenSitemaps.has(u)).slice(0, opts.maxChild - walked.length);
+    batch.forEach(u => seenSitemaps.add(u));
+    queue = [];
+    const parsedBatch = await mapLimit(batch, 5, async sm => {
+      if(/\.gz$/i.test(sm)) return { sm, skip:'gzip' };
+      try{
+        const r = await fetchText(sm, { timeout: 20000 });
+        return { sm, parsed: parseSitemap(r.text, sm) };
+      }catch(e){ return { sm, err: e.message }; }
+    });
+    for(const b of parsedBatch){
+      if(b.skip){ logLine(log, '  skip  ' + shortSm(b.sm) + ' (' + b.skip + ', browsers cannot decompress it)', 'dim'); continue; }
+      if(b.err){ logLine(log, '  fail  ' + shortSm(b.sm) + ' (' + b.err + ')', 'bad'); continue; }
+      walked.push(b.sm);
+      const parsed = b.parsed;
+      if(parsed.children.length){
+        logLine(log, '  index ' + shortSm(b.sm) + ' -> ' + parsed.children.length + ' child sitemaps', 'ok');
+        parsed.children.forEach(c => { if(!seenSitemaps.has(c)) queue.push(c); });
+      }
+      if(parsed.urls.length){
+        logLine(log, '  read  ' + shortSm(b.sm) + ' -> ' + parsed.urls.length + ' URLs', 'ok');
+        parsed.urls.forEach(u => found.push({ loc: u.loc, lastmod: u.lastmod || null, source: b.sm }));
+      }
+      if(!parsed.children.length && !parsed.urls.length) logLine(log, '  empty ' + shortSm(b.sm), 'dim');
+    }
+    if(found.length > 20000){ logLine(log, '  URL cap reached (20,000)', 'dim'); break; }
+  }
+  if(queue.length) logLine(log, '  ' + queue.length + ' further child sitemaps skipped (max child sitemaps = ' + opts.maxChild + ')', 'dim');
+  return { urls: found, sitemaps: walked, ok: found.length > 0 };
+}
+function shortSm(u){ try{ return new URL(u).pathname; }catch(e){ return u; } }
+
+/* ------------------------------------------------- normalise, group, sample */
+function normalise(list, origin){
+  const originHost = new URL(origin).host.replace(/^www\./,'');
+  const seen = new Set(); const out = [];
+  for(const item of list){
+    let u;
+    try{ u = new URL(item.loc, origin); }catch(e){ continue; }
+    if(!/^https?:$/.test(u.protocol)) continue;
+    if(u.host.replace(/^www\./,'') !== originHost) continue;
+    if(/\.(jpg|jpeg|png|gif|webp|avif|svg|pdf|zip|mp4|mp3|xml|json|css|js|ico|woff2?)$/i.test(u.pathname)) continue;
+    u.hash = ''; u.search = '';
+    let href = u.toString();
+    if(href.length > 1 && href.endsWith('/') && u.pathname !== '/') href = href.slice(0, -1);
+    if(seen.has(href)) continue;
+    seen.add(href);
+    out.push({ url: href, path: u.pathname, lastmod: item.lastmod || null, source: item.source || null, key: keyPageType(href) });
+  }
+  return out.sort((a,b) => a.path.localeCompare(b.path));
+}
+
+/* Collection = first path segment. Single-segment pages collapse into "top-level pages". */
+function groupUrls(items){
+  const buckets = new Map();
+  const put = (name, it) => { if(!buckets.has(name)) buckets.set(name, []); buckets.get(name).push(it); };
+  for(const it of items){
+    const segs = it.path.split('/').filter(Boolean);
+    if(segs.length === 0){ put('home', it); continue; }
+    put(decodeURIComponent(segs[0]).toLowerCase(), it);
+  }
+  // collapse singleton buckets whose only member is a one-segment URL
+  const top = [];
+  for(const [name, arr] of Array.from(buckets)){
+    if(name === 'home') continue;
+    if(arr.length === 1 && arr[0].path.split('/').filter(Boolean).length === 1){
+      top.push(arr[0]); buckets.delete(name);
+    }
+  }
+  if(top.length){
+    const existing = buckets.get('top-level pages') || [];
+    buckets.set('top-level pages', existing.concat(top).sort((a,b)=>a.path.localeCompare(b.path)));
+  }
+  // order: home, top-level pages, then by size desc
+  const ordered = [];
+  if(buckets.has('home')) ordered.push(['home', buckets.get('home')]);
+  if(buckets.has('top-level pages')) ordered.push(['top-level pages', buckets.get('top-level pages')]);
+  Array.from(buckets).filter(([n]) => n !== 'home' && n !== 'top-level pages')
+    .sort((a,b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .forEach(g => ordered.push(g));
+  return ordered;
+}
+
+/* Even, deterministic spread across a bucket, key pages first. */
+function sampleBucket(arr, k){
+  if(arr.length <= k) return arr.slice();
+  const picked = [];
+  const keys = arr.filter(x => x.key);
+  for(const it of keys){ if(picked.length < k) picked.push(it); }
+  const rest = arr.filter(x => !picked.includes(x));
+  const need = k - picked.length;
+  if(need > 0 && rest.length){
+    if(need === 1){ picked.push(rest[0]); }
+    else {
+      for(let i = 0; i < need; i++){
+        const idx = Math.round(i * (rest.length - 1) / (need - 1));
+        const cand = rest[idx];
+        if(!picked.includes(cand)) picked.push(cand);
+      }
+      let j = 0;
+      while(picked.length < k && j < rest.length){ if(!picked.includes(rest[j])) picked.push(rest[j]); j++; }
+    }
+  }
+  return picked.sort((a,b) => a.path.localeCompare(b.path));
+}
+
+function sampleAll(groups, perGroup, totalCap){
+  const pools = groups.map(([name, arr]) => ({ name, pool: sampleBucket(arr, perGroup) }));
+  // guarantee the homepage
+  const chosen = new Set();
+  const home = pools.find(p => p.name === 'home');
+  if(home && home.pool.length) chosen.add(home.pool[0]);
+  // round-robin so one huge collection cannot eat the whole budget
+  let round = 0, added = true;
+  while(chosen.size < totalCap && added){
+    added = false;
+    for(const p of pools){
+      if(chosen.size >= totalCap) break;
+      const it = p.pool[round];
+      if(it && !chosen.has(it)){ chosen.add(it); added = true; }
+    }
+    round++;
+    if(round > perGroup) break;
+  }
+  return chosen;
+}
+
+/* ------------------------------------------------------------- app state */
+const state = {
+  origin: null, all: [], groups: [], selected: new Set(),
+  results: [], running: false, cancel: false, strategies: []
+};
+
+function renderSelection(){
+  const list = $('#selList'); list.innerHTML = '';
+  const pills = $('#selPills'); pills.innerHTML = '';
+  const totalSel = state.selected.size;
+  const cap = clampInt($('#totalCap').value, 1, 100, 100);
+  const addPill = (label, val) => { const p = el('span','pill'); p.innerHTML = esc(label) + ' <b>' + esc(String(val)) + '</b>'; pills.appendChild(p); };
+  addPill('Collections', state.groups.length);
+  addPill('URLs discovered', state.all.length);
+  addPill('Selected', totalSel + ' / ' + cap);
+  const nStrat = (($('#stMobile').checked?1:0) + ($('#stDesktop').checked?1:0)) || 1;
+  addPill('API calls', totalSel * nStrat);
+
+  for(const [name, arr] of state.groups){
+    const picked = arr.filter(x => state.selected.has(x));
+    const g = el('div','sel-group');
+    const gh = el('div','gh');
+    const cb = document.createElement('input'); cb.type='checkbox';
+    cb.checked = picked.length > 0; cb.indeterminate = picked.length > 0 && picked.length < arr.length;
+    cb.addEventListener('change', () => {
+      if(cb.checked){ sampleBucket(arr, clampInt($('#perGroup').value,1,10,10)).forEach(x => state.selected.add(x)); }
+      else { arr.forEach(x => state.selected.delete(x)); }
+      renderSelection();
+    });
+    gh.appendChild(cb);
+    const t = el('div','grow');
+    t.innerHTML = '<span class="grouphd">' + esc(name) + '</span> <span class="tag">' + picked.length + ' of ' + arr.length + '</span>';
+    gh.appendChild(t);
+    g.appendChild(gh);
+
+    const show = arr.slice(0, 400);
+    for(const it of show){
+      const row = el('div','sel-item' + (state.selected.has(it) ? ' picked' : ''));
+      const c = document.createElement('input'); c.type='checkbox'; c.checked = state.selected.has(it);
+      c.addEventListener('change', () => { c.checked ? state.selected.add(it) : state.selected.delete(it); renderSelection(); });
+      row.appendChild(c);
+      const u = el('div','u', it.path === '/' ? '/ (home)' : it.path);
+      u.title = it.url;
+      row.appendChild(u);
+      if(it.key){ const k = el('span','tag key', it.key); row.appendChild(k); }
+      g.appendChild(row);
+    }
+    if(arr.length > show.length) g.appendChild(el('div','sel-item', '… ' + (arr.length - show.length) + ' more not listed'));
+    list.appendChild(g);
+  }
+  $('#runBtn').disabled = totalSel === 0 || state.running;
+  $('#runNote').textContent = totalSel ? (totalSel + ' URL' + (totalSel>1?'s':'') + ' x ' + nStrat + ' strateg' + (nStrat>1?'ies':'y') + ' = ' + (totalSel*nStrat) + ' PageSpeed calls') : '';
+}
+
+function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
+
+function buildGroupsAndSample(items){
+  state.all = items;
+  state.groups = groupUrls(items);
+  const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
+  const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
+  state.selected = sampleAll(state.groups, perGroup, totalCap);
+  $('#selCard').classList.remove('hidden');
+  renderSelection();
+}
+
+/* --------------------------------------------------------- PSI API runner */
+const PSI_ENDPOINT = 'https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed';
+
+function extractRun(json){
+  const lr = json.lighthouseResult || {};
+  const a = lr.audits || {};
+  const c = lr.categories || {};
+  const num = k => (a[k] && typeof a[k].numericValue === 'number') ? a[k].numericValue : null;
+  const sc = k => (c[k] && typeof c[k].score === 'number') ? Math.round(c[k].score * 100) : null;
+  const le = json.loadingExperience || {};
+  const fm = le.metrics || {};
+  const pct = (k, div) => (fm[k] && typeof fm[k].percentile === 'number') ? fm[k].percentile / (div || 1) : null;
+  return {
+    perf: sc('performance'), a11y: sc('accessibility'), bp: sc('best-practices'), seo: sc('seo'),
+    lcp: num('largest-contentful-paint'),
+    fcp: num('first-contentful-paint'),
+    cls: num('cumulative-layout-shift'),
+    tbt: num('total-blocking-time'),
+    si:  num('speed-index'),
+    ttfb: num('server-response-time'),
+    bytes: num('total-byte-weight'),
+    fieldLcp: pct('LARGEST_CONTENTFUL_PAINT_MS'),
+    fieldCls: pct('CUMULATIVE_LAYOUT_SHIFT_SCORE', 100),
+    fieldInp: pct('INTERACTION_TO_NEXT_PAINT'),
+    fieldTtfb: pct('EXPERIMENTAL_TIME_TO_FIRST_BYTE'),
+    fieldOverall: le.overall_category || null,
+    finalUrl: lr.finalDisplayedUrl || lr.finalUrl || json.id || null,
+    fetchedAt: lr.fetchTime || null,
+    lhVersion: lr.lighthouseVersion || null
+  };
+}
+
+async function psiRun(url, strategy, key, categories){
+  const p = new URLSearchParams();
+  p.set('url', url);
+  p.set('strategy', strategy);
+  categories.forEach(c => p.append('category', c));
+  if(key) p.set('key', key);
+  const endpoint = PSI_ENDPOINT + '?' + p.toString();
+  let lastErr = 'unknown error';
+  for(let attempt = 0; attempt < 3; attempt++){
+    if(state.cancel) throw new Error('cancelled');
+    try{
+      const r = await fetch(endpoint, { method:'GET' });
+      if(r.status === 429 || r.status >= 500){
+        lastErr = 'HTTP ' + r.status + ' (rate limit or Google-side error)';
+        await sleep(2500 * (attempt + 1) + Math.random() * 1200);
+        continue;
+      }
+      const json = await r.json().catch(() => null);
+      if(!r.ok){
+        const msg = json && json.error && json.error.message ? json.error.message : ('HTTP ' + r.status);
+        if(/quota|rate/i.test(msg) && attempt < 2){ lastErr = msg; await sleep(3000 * (attempt+1)); continue; }
+        throw new Error(msg);
+      }
+      if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
+      return extractRun(json);
+    }catch(e){
+      if(e.message === 'cancelled') throw e;
+      lastErr = e.message || String(e);
+      if(attempt < 2) await sleep(1800 * (attempt + 1));
+    }
+  }
+  throw new Error(lastErr);
+}
+
+async function runPool(items, limit, worker, onDone){
+  let cursor = 0, finished = 0;
+  const results = new Array(items.length);
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while(true){
+      if(state.cancel) return;
+      const i = cursor++;
+      if(i >= items.length) return;
+      try{ results[i] = { ok:true, value: await worker(items[i]) , item: items[i] }; }
+      catch(e){ results[i] = { ok:false, error: e.message || String(e), item: items[i] }; }
+      finished++;
+      onDone(finished, items.length, results[i]);
+    }
+  });
+  await Promise.all(runners);
+  return results.filter(Boolean);
+}
+
+async function runTest(){
+  const key = $('#key').value.trim();
+  const cats = ['performance'].concat($('#allCats').checked ? ['accessibility','best-practices','seo'] : []);
+  const strategies = [];
+  if($('#stMobile').checked) strategies.push('mobile');
+  if($('#stDesktop').checked) strategies.push('desktop');
+  if(!strategies.length) strategies.push('mobile');
+  state.strategies = strategies;
+
+  const urls = Array.from(state.selected);
+  const jobs = [];
+  for(const it of urls) for(const s of strategies) jobs.push({ item: it, strategy: s });
+
+  state.running = true; state.cancel = false; state.results = [];
+  $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
+  $('#progWrap').classList.remove('hidden');
+  $('#runErr').innerHTML = '';
+  if(!key){
+    $('#runErr').innerHTML = '<div class="note">No API key set. Google allows only a trickle of unauthenticated PageSpeed requests, so most of these will fail. Add a key and re-run if you see errors below.</div>';
+  }
+
+  const t0 = Date.now();
+  const conc = clampInt($('#conc').value, 1, 8, 4);
+  let failures = 0;
+
+  await runPool(jobs, conc, async job => {
+    const data = await psiRun(job.item.url, job.strategy, key, cats);
+    return data;
+  }, (done, total, res) => {
+    const pct = Math.round(done / total * 100);
+    $('#progBar').style.width = pct + '%';
+    if(res && !res.ok) failures++;
+    const elapsed = (Date.now() - t0) / 1000;
+    const eta = done ? Math.round(elapsed / done * (total - done)) : 0;
+    $('#runNote').textContent = done + ' of ' + total + ' complete' + (failures ? ' · ' + failures + ' failed' : '') +
+      (done < total ? ' · about ' + (eta > 90 ? Math.round(eta/60) + ' min' : eta + ' s') + ' left' : ' · done in ' + Math.round(elapsed) + ' s');
+    if(res){
+      state.results.push({
+        url: res.item.item.url, path: res.item.item.path, key: res.item.item.key,
+        collection: collectionOf(res.item.item), strategy: res.item.strategy,
+        ok: res.ok, error: res.ok ? null : res.error, data: res.ok ? res.value : null
+      });
+      renderResults();
+    }
+  });
+
+  state.running = false;
+  $('#stopBtn').disabled = true; $('#reSample').disabled = false; $('#runBtn').disabled = false;
+  renderResults();
+}
+
+function collectionOf(item){
+  for(const [name, arr] of state.groups) if(arr.includes(item)) return name;
+  return 'other';
+}
+
+/* ---------------------------------------------------------- results view */
+let sortKey = 'perf', sortDir = 'desc';
+
+function renderResults(){
+  const card = $('#resCard');
+  if(!state.results.length){ card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+
+  const sel = $('#resStrategy');
+  const strats = uniq(state.results.map(r => r.strategy));
+  if(sel.options.length !== strats.length + (strats.length > 1 ? 1 : 0)){
+    sel.innerHTML = '';
+    strats.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s[0].toUpperCase() + s.slice(1); sel.appendChild(o); });
+    sel.value = strats[0];
+  }
+  const active = sel.value || strats[0];
+  const rows = state.results.filter(r => r.strategy === active);
+  const okRows = rows.filter(r => r.ok);
+  const failRows = rows.filter(r => !r.ok);
+
+  const box = $('#resBody');
+  box.innerHTML = '';
+
+  if(!okRows.length){
+    box.appendChild(el('div','empty','No successful measurements yet for ' + active + '.'));
+  } else {
+    box.appendChild(tilesFor(okRows, active));
+    box.appendChild(legend());
+    box.appendChild(collectionTable(okRows));
+    box.appendChild(urlTable(okRows));
+  }
+  if(failRows.length){
+    const d = el('div','err');
+    d.innerHTML = '<b>' + failRows.length + ' request' + (failRows.length>1?'s':'') + ' failed (' + active + ')</b><br>' +
+      failRows.slice(0, 12).map(r => esc(r.path) + ': ' + esc(r.error)).join('<br>') +
+      (failRows.length > 12 ? '<br>… and ' + (failRows.length - 12) + ' more' : '');
+    box.appendChild(d);
+  }
+}
+
+function tilesFor(rows, strategy){
+  const wrap = el('div');
+  const h = el('div'); h.style.margin = '0 0 12px';
+  h.innerHTML = '<h3>Site average, ' + esc(strategy) + '</h3><p class="hint" style="margin-top:4px">Mean across ' + rows.length + ' measured page' + (rows.length>1?'s':'') + ' in ' + uniq(rows.map(r=>r.collection)).length + ' collection' + (uniq(rows.map(r=>r.collection)).length>1?'s':'') + '. Median shown beneath each figure.</p>';
+  wrap.appendChild(h);
+
+  const keys = ['perf','lcp','cls','tbt','fcp','ttfb','si'];
+  const extra = ['a11y','bp','seo'].filter(k => rows.some(r => r.data && r.data[k] != null));
+  const tiles = el('div','tiles');
+  for(const k of keys.concat(extra)){
+    const vals = rows.map(r => r.data ? r.data[k] : null);
+    const m = mean(vals), md = median(vals);
+    const g = grade(k, m);
+    const spec = METRICS[k];
+    const t = el('div','tile');
+    const pctFill = m == null ? 0 : Math.max(3, Math.min(100, spec.higher ? (m / spec.max * 100) : (1 - Math.min(1, m / spec.max)) * 100));
+    const color = g === 'good' ? 'var(--good)' : g === 'ni' ? 'var(--warning)' : g === 'poor' ? 'var(--critical)' : 'var(--axis)';
+    t.innerHTML =
+      '<div class="lbl">' + esc(spec.label) + '</div>' +
+      '<div class="val">' + esc(fmt(k, m)) + '</div>' +
+      '<div class="meter"><i style="width:' + pctFill.toFixed(1) + '%;background:' + color + '"></i></div>' +
+      statusHTML(k, m) +
+      '<div class="meta" style="margin-top:5px">median ' + esc(fmt(k, md)) + '</div>';
+    tiles.appendChild(t);
+  }
+  wrap.appendChild(tiles);
+
+  const fieldRows = rows.filter(r => r.data && (r.data.fieldLcp != null || r.data.fieldInp != null));
+  if(fieldRows.length){
+    const f = el('div','note');
+    const fl = mean(fieldRows.map(r => r.data.fieldLcp));
+    const fc = mean(fieldRows.map(r => r.data.fieldCls));
+    const fi = mean(fieldRows.map(r => r.data.fieldInp));
+    f.innerHTML = '<b>Real-user field data (CrUX)</b> available for ' + fieldRows.length + ' of ' + rows.length +
+      ' pages. Average LCP ' + fmt('lcp', fl) + ', CLS ' + fmt('cls', fc) + ', INP ' + fmt('inp', fi) +
+      '. Field data reflects the last 28 days of Chrome users; the tiles above are lab data.';
+    wrap.appendChild(f);
+  }
+  return wrap;
+}
+
+function legend(){
+  const l = el('div','legend');
+  l.innerHTML = '<span><i style="background:var(--good)"></i>Good</span>' +
+                '<span><i style="background:var(--warning)"></i>Needs work</span>' +
+                '<span><i style="background:var(--critical)"></i>Poor</span>' +
+                '<span><i style="background:var(--axis)"></i>No data</span>' +
+                '<span style="color:var(--muted)">Thresholds follow Google’s Core Web Vitals bands.</span>';
+  return l;
+}
+
+function collectionTable(rows){
+  const wrap = el('div');
+  wrap.appendChild(Object.assign(el('h3','', 'Average by collection'), { style:'margin:22px 0 10px' }));
+  const cols = ['perf','lcp','cls','tbt','ttfb'];
+  const byCol = new Map();
+  rows.forEach(r => { if(!byCol.has(r.collection)) byCol.set(r.collection, []); byCol.get(r.collection).push(r); });
+  const entries = Array.from(byCol).map(([name, rs]) => ({
+    name, n: rs.length, vals: Object.fromEntries(cols.map(c => [c, mean(rs.map(r => r.data[c]))]))
+  })).sort((a,b) => (a.vals.perf ?? 999) - (b.vals.perf ?? 999));
+
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Collection</th><th class="n">Pages</th>' +
+    cols.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') +
+    '<th style="width:130px">Score scale</th></tr></thead><tbody>';
+  for(const e of entries){
+    const g = grade('perf', e.vals.perf);
+    const w = e.vals.perf == null ? 0 : e.vals.perf;
+    html += '<tr><td><b>' + esc(e.name) + '</b></td><td class="n">' + e.n + '</td>' +
+      cols.map(c => '<td class="n">' + scoreCell(c, e.vals[c]) + '</td>').join('') +
+      '<td><div class="bar"><i style="width:' + w + '%;background:' + (g==='good'?'var(--good)':g==='ni'?'var(--warning)':'var(--critical)') + '"></i></div></td></tr>';
+  }
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  wrap.appendChild(tw);
+  return wrap;
+}
+
+function urlTable(rows){
+  const wrap = el('div');
+  wrap.appendChild(Object.assign(el('h3','', 'Every measured page'), { style:'margin:22px 0 10px' }));
+  const cols = [['perf','Perf'],['lcp','LCP'],['cls','CLS'],['tbt','TBT'],['fcp','FCP'],['ttfb','TTFB'],['si','SI']];
+  const extra = [['a11y','A11y'],['bp','BP'],['seo','SEO']].filter(([k]) => rows.some(r => r.data[k] != null));
+  const all = cols.concat(extra);
+
+  const sorted = rows.slice().sort((a,b) => {
+    const av = a.data[sortKey], bv = b.data[sortKey];
+    if(av == null) return 1; if(bv == null) return -1;
+    return sortDir === 'desc' ? bv - av : av - bv;
+  });
+
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Page</th><th>Collection</th>' +
+    all.map(([k,l]) => '<th class="n sortable" data-k="' + k + '"' + (k===sortKey?' data-dir="'+sortDir+'"':'') + '>' + esc(l) + '</th>').join('') +
+    '</tr></thead><tbody>';
+  for(const r of sorted){
+    html += '<tr><td class="urlcell"><a href="https://pagespeed.web.dev/analysis?url=' + encodeURIComponent(r.url) +
+      '" target="_blank" rel="noopener" title="' + esc(r.url) + '">' + esc(r.path === '/' ? '/ (home)' : r.path) + '</a>' +
+      (r.key ? '<span class="tag key">' + esc(r.key) + '</span>' : '') + '</td>' +
+      '<td>' + esc(r.collection) + '</td>' +
+      all.map(([k]) => '<td class="n">' + scoreCell(k, r.data[k]) + '</td>').join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  tw.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
+    const k = th.dataset.k;
+    if(k === sortKey) sortDir = sortDir === 'desc' ? 'asc' : 'desc';
+    else { sortKey = k; sortDir = (METRICS[k].higher ? 'desc' : 'asc'); }
+    renderResults();
+  }));
+  wrap.appendChild(tw);
+  return wrap;
+}
+
+/* ------------------------------------------------------------- exporting */
+function exportRows(){
+  return state.results.map(r => ({
+    url: r.url, path: r.path, collection: r.collection, key_page: r.key || '',
+    strategy: r.strategy, status: r.ok ? 'ok' : 'error', error: r.error || '',
+    performance: r.data ? r.data.perf : '', accessibility: r.data ? r.data.a11y : '',
+    best_practices: r.data ? r.data.bp : '', seo: r.data ? r.data.seo : '',
+    lcp_ms: r.data ? r.data.lcp : '', fcp_ms: r.data ? r.data.fcp : '',
+    cls: r.data ? r.data.cls : '', tbt_ms: r.data ? r.data.tbt : '',
+    speed_index_ms: r.data ? r.data.si : '', ttfb_ms: r.data ? r.data.ttfb : '',
+    total_bytes: r.data ? r.data.bytes : '',
+    field_lcp_ms: r.data ? r.data.fieldLcp : '', field_cls: r.data ? r.data.fieldCls : '',
+    field_inp_ms: r.data ? r.data.fieldInp : '', field_overall: r.data ? r.data.fieldOverall : '',
+    fetched_at: r.data ? r.data.fetchedAt : ''
+  }));
+}
+function download(name, text, type){
+  const b = new Blob([text], { type });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(b); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+function slugOrigin(){ try{ return new URL(state.origin).host.replace(/[^a-z0-9]+/gi,'-'); }catch(e){ return 'site'; } }
+$('#dlCsv').addEventListener('click', () => {
+  const rows = exportRows(); if(!rows.length) return;
+  const head = Object.keys(rows[0]);
+  const q = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
+  const csv = [head.join(',')].concat(rows.map(r => head.map(h => q(r[h])).join(','))).join('\n');
+  download('pagespeed-' + slugOrigin() + '.csv', csv, 'text/csv');
+});
+$('#dlJson').addEventListener('click', () => {
+  const strats = uniq(state.results.map(r => r.strategy));
+  const summary = {};
+  for(const s of strats){
+    const rs = state.results.filter(r => r.strategy === s && r.ok);
+    const byCol = {};
+    rs.forEach(r => { (byCol[r.collection] = byCol[r.collection] || []).push(r); });
+    summary[s] = {
+      pages_measured: rs.length,
+      site_average: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, mean(rs.map(r => r.data[k]))])),
+      site_median: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, median(rs.map(r => r.data[k]))])),
+      by_collection: Object.fromEntries(Object.entries(byCol).map(([c, rr]) => [c, {
+        pages: rr.length,
+        average: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, mean(rr.map(r => r.data[k]))]))
+      }]))
+    };
+  }
+  download('pagespeed-' + slugOrigin() + '.json', JSON.stringify({
+    site: state.origin, generated_at: new Date().toISOString(),
+    urls_discovered: state.all.length, collections: state.groups.length,
+    summary, results: exportRows()
+  }, null, 2), 'application/json');
+});
+$('#resStrategy').addEventListener('change', renderResults);
+
+/* --------------------------------------------------------------- wiring */
+function originOf(raw){
+  let v = raw.trim();
+  if(!v) return null;
+  if(!/^https?:\/\//i.test(v)) v = 'https://' + v;
+  try{ return new URL(v).origin; }catch(e){ return null; }
+}
+function manualItems(origin){
+  const lines = $('#manual').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  return lines.map(l => ({ loc: /^https?:\/\//i.test(l) ? l : (origin || '') + (l.startsWith('/') ? l : '/' + l) }));
+}
+
+$('#discoverBtn').addEventListener('click', async () => {
+  const origin = originOf($('#site').value);
+  $('#setupErr').innerHTML = '';
+  if(!origin){ $('#setupErr').innerHTML = '<div class="err">Enter a valid site URL, for example https://example.com</div>'; return; }
+  state.origin = origin;
+  $('#site').value = origin;
+  localStorage.setItem('pss#site', origin);
+
+  const btn = $('#discoverBtn'); btn.disabled = true; btn.textContent = 'Searching…';
+  $('#discCard').classList.remove('hidden');
+  $('#selCard').classList.add('hidden'); $('#resCard').classList.add('hidden');
+  const log = $('#discLog'); log.innerHTML = ''; $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
+  transport = null;
+
+  const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30) };
+  let res;
+  try{ res = await discover(origin, opts, log); }
+  catch(e){ res = { urls: [], sitemaps: [], ok: false }; logLine(log, 'Discovery error: ' + e.message, 'bad'); }
+
+  const manual = manualItems(origin);
+  const merged = res.urls.concat(manual.map(m => Object.assign({}, m, { source: 'manual' })));
+  const items = normalise(merged, origin);
+
+  btn.disabled = false; btn.textContent = 'Find sitemap and sample URLs';
+
+  if(!items.length){
+    $('#discStat').textContent = 'no URLs';
+    const why = res && res.noTransport
+      ? '<b>Could not reach ' + esc(origin) + ' from the browser.</b> The site blocks cross-origin requests and no public proxy could fetch it either. '
+      : '<b>No sitemap found.</b> The site may not publish one at a common path, or its robots.txt does not declare one. ';
+    $('#discSummary').innerHTML = '<div class="err">' + why +
+      'Paste URLs into the manual list under “Sampling and run options” and press “Use manual list only”.</div>';
+    return;
+  }
+  $('#discStat').textContent = items.length + ' URLs';
+  logLine(log, '', 'dim');
+  logLine(log, 'Kept ' + items.length + ' unique, same-host, non-asset URLs' + (manual.length ? ' (including ' + manual.length + ' manual)' : '') + '.', 'ok');
+  $('#discSummary').innerHTML = '<div class="note"><b>' + items.length + ' URLs</b> from <b>' + res.sitemaps.length + '</b> sitemap file' +
+    (res.sitemaps.length === 1 ? '' : 's') + (transport && transport.name !== 'direct' ? ' (fetched through the <b>' + esc(transport.name) + '</b> public proxy, because the site blocks direct browser access)' : ' (fetched directly, no proxy needed)') + '.</div>';
+  buildGroupsAndSample(items);
+  $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
+});
+
+$('#manualOnlyBtn').addEventListener('click', () => {
+  const origin = originOf($('#site').value) || originOf(($('#manual').value.split(/\r?\n/)[0] || ''));
+  if(!origin){ $('#setupErr').innerHTML = '<div class="err">Enter a site URL or at least one absolute URL in the manual list.</div>'; return; }
+  state.origin = origin;
+  const items = normalise(manualItems(origin), origin);
+  if(!items.length){ $('#setupErr').innerHTML = '<div class="err">The manual list is empty or contains no URLs on ' + esc(origin) + '.</div>'; return; }
+  $('#setupErr').innerHTML = '';
+  $('#discCard').classList.add('hidden');
+  buildGroupsAndSample(items);
+  $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
+});
+
+$('#reSample').addEventListener('click', () => {
+  const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
+  const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
+  state.selected = sampleAll(state.groups, perGroup, totalCap);
+  renderSelection();
+});
+$('#selNone').addEventListener('click', () => { state.selected = new Set(); renderSelection(); });
+$('#runBtn').addEventListener('click', () => { runTest().catch(e => { $('#runErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; state.running = false; $('#runBtn').disabled = false; $('#stopBtn').disabled = true; }); });
+$('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn').disabled = true; $('#runNote').textContent = 'Stopping after in-flight requests…'; });
+['#perGroup','#totalCap','#stMobile','#stDesktop'].forEach(s => $(s).addEventListener('change', () => { if(state.groups.length) renderSelection(); }));
+
+/* deep link: ?site=example.com */
+(function fromQuery(){
+  const q = new URLSearchParams(location.search);
+  if(q.get('site')) $('#site').value = q.get('site');
+  if(q.get('key')) $('#key').value = q.get('key');
+})();
+</script>
+</body>
+</html>
