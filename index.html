@@ -2529,11 +2529,19 @@ async function createGoogleSheet(model, token){
   });
 
   // batchUpdate has a request ceiling; send in chunks
+  const url = 'https://docs.google.com/spreadsheets/d/' + id + '/edit';
   for(let i = 0; i < reqs.length; i += 200){
-    await gapi('https://sheets.googleapis.com/v4/spreadsheets/' + id + ':batchUpdate', 'POST',
-      { requests: reqs.slice(i, i + 200) }, token);
+    try{
+      await gapi('https://sheets.googleapis.com/v4/spreadsheets/' + id + ':batchUpdate', 'POST',
+        { requests: reqs.slice(i, i + 200) }, token);
+    }catch(e){
+      // the values are already written, so return the sheet rather than lose it
+      const err = new Error(e.message);
+      err.partialUrl = url;
+      throw err;
+    }
   }
-  return 'https://docs.google.com/spreadsheets/d/' + id + '/edit';
+  return url;
 }
 
 function pushCondRules(reqs, sheetId, key, r1, r2, c1, c2){
@@ -2544,10 +2552,10 @@ function pushCondRules(reqs, sheetId, key, r1, r2, c1, c2){
   const rules = th.higher
     ? [ [cond('NUMBER_GREATER_THAN_EQ', th.good), BRAND.good],
         [cond('NUMBER_GREATER_THAN_EQ', th.ni),   BRAND.ni],
-        [cond('NUMBER_LESS_THAN',       th.ni),   BRAND.poor] ]
+        [cond('NUMBER_LESS',           th.ni),   BRAND.poor] ]
     : [ [cond('NUMBER_LESS_THAN_EQ',    th.good), BRAND.good],
         [cond('NUMBER_LESS_THAN_EQ',    th.ni),   BRAND.ni],
-        [cond('NUMBER_GREATER_THAN',    th.ni),   BRAND.poor] ];
+        [cond('NUMBER_GREATER',        th.ni),   BRAND.poor] ];
   rules.forEach(([condition, band], i) => {
     reqs.push({ addConditionalFormatRule: { index: i, rule: { ranges: [range], booleanRule: { condition, format: fmt(band) } } } });
   });
@@ -2590,7 +2598,11 @@ $('#mkSheet').addEventListener('click', async () => {
       'It lives in your Drive; this app can only see files it created itself.</div>';
     window.open(url, '_blank', 'noopener');
   }catch(e){
-    $('#reportNote').innerHTML = '<div class="err">Google Sheets export failed: ' + esc(e.message) + '</div>';
+    $('#reportNote').innerHTML = '<div class="err"><b>Google Sheets export ' +
+      (e.partialUrl ? 'was only partly applied.' : 'failed.') + '</b> ' + esc(e.message) +
+      (e.partialUrl ? '<br><br>The data was written before this happened, so the sheet exists: <a href="' +
+        esc(e.partialUrl) + '" target="_blank" rel="noopener">open it</a>. Only the formatting is missing.' : '') +
+      '</div>';
   }finally{ btn.disabled = false; btn.textContent = was; }
 });
 
