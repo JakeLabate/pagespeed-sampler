@@ -77,6 +77,54 @@ pairings themselves under `paired_collections`.
 Quota note: four sites at 100 URLs across both strategies is 800 calls. The daily
 allowance is 25,000.
 
+## Reports
+
+Beyond the CSV and JSON dumps there are two report exports, both built from the same
+model so the tabs, copy and thresholds are identical between them.
+
+**Excel** needs no setup. It builds the workbook in the browser with ExcelJS and
+downloads it. Drop it into Drive and open with Google Sheets and the fills, fonts,
+number formats, frozen headers, banding and conditional formatting come across.
+
+**Google Sheet** creates a real spreadsheet in your Drive and hands you the link. It
+uses Google Identity Services with the `drive.file` scope, so the app can only ever see
+files it created itself, never the rest of your Drive. Setup, once:
+
+1. In the same Google Cloud project as your PageSpeed key, enable the **Google Sheets
+   API**.
+2. Create an OAuth 2.0 Client ID of type **Web application**.
+3. Add the origin the app is served from to its **Authorised JavaScript origins**. The
+   app prints the exact string to paste, under the client ID field.
+4. Paste the client ID into the app. It is kept in `localStorage` in your browser.
+
+### Tabs
+
+Numbered without leading zeros, renumbered so they stay contiguous when a section does
+not apply. A single-site run drops the three comparison tabs.
+
+| Tab | What it holds |
+|---|---|
+| Method | Context, Sources, Scope, Assumptions, Prepared by. Scope lists every run parameter including the collection pairings |
+| Summary | Headline mean and median per metric, split into what is working and what needs work |
+| Site comparison | One row per site per strategy (multi-site only) |
+| Key pages | Page roles lined up across sites (multi-site only) |
+| Paired collections | Each pairing, per site, per strategy (multi-site only) |
+| Collections | Every collection on every site |
+| All pages | Every measurement, filterable |
+| Failures | Anything that never succeeded, with Google's own error text |
+| Glossary and rubric | What each metric means and the exact threshold bands |
+
+### Formatting
+
+Deep indigo `#191A3E` header bands with a Space Grotesk face, IBM Plex Sans body, IBM
+Plex Mono for paths and URLs, teal `#0E8C8B` tab colours. Millisecond metrics over a
+second are written as seconds with a `0.00" s"` format so they read as durations rather
+than raw numbers; conditional formatting thresholds are converted with them. Every
+metric column carries three rules matching the Core Web Vitals bands, green then amber
+then red, applied in that order so the first match wins. Header rows are frozen, tables
+carry a filter, rows are banded, and print setup is fit-to-width with repeating header
+rows.
+
 ## Concurrency
 
 The 240-queries-per-minute project quota is not the binding constraint. Each PSI call

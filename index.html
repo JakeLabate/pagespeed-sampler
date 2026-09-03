@@ -200,6 +200,8 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .sel-item.picked .u{color:var(--ink)}
 footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-size:12px;color:var(--muted);display:flex;gap:14px;flex-wrap:wrap}
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js" defer></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div class="wrap">
@@ -277,6 +279,18 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
           <div class="hint">Direct fetch is tried first; proxies only if the site blocks it.</div>
         </div>
       </div>
+      <div class="row c2" style="margin-top:12px">
+        <div>
+          <label class="f" for="gclient">Google OAuth client ID (for Google Sheets export)</label>
+          <input type="text" id="gclient" placeholder="1234567890-abc123.apps.googleusercontent.com" spellcheck="false" autocomplete="off">
+          <div class="hint">Optional. Needed only for the one-click Google Sheet. Create a <b>Web application</b> OAuth client in the same Google Cloud project as your PSI key and add <span class="mono" id="originHint"></span> to its authorised JavaScript origins. Excel export needs none of this.</div>
+        </div>
+        <div>
+          <label class="f" for="clientName">Client or project name (report cover)</label>
+          <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
+          <div class="hint">Appears on the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
+        </div>
+      </div>
       <div style="margin-top:14px">
         <label class="f" for="manual">Manual URL list (fallback or addition)</label>
         <textarea id="manual" placeholder="https://example.com/&#10;https://example.com/about&#10;https://example.com/contact" spellcheck="false"></textarea>
@@ -328,8 +342,11 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
       <select id="resStrategy" style="width:auto"></select>
       <button class="btn ghost sm" id="dlCsv" type="button">CSV</button>
       <button class="btn ghost sm" id="dlJson" type="button">JSON</button>
+      <button class="btn ghost sm" id="dlXlsx" type="button">Excel</button>
+      <button class="btn sm" id="mkSheet" type="button">Google Sheet</button>
     </div>
   </div>
+  <div id="reportNote"></div>
   <div id="resBody"></div>
 </section>
 
@@ -363,7 +380,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -1748,6 +1765,457 @@ function failurePanel(failRows, rows, active){
   return d;
 }
 
+/* ------------------------------------------------------- report generation */
+/* Both writers, Excel and Google Sheets, consume the same model, so the tabs,
+   copy and thresholds are defined once and only the rendering differs. */
+
+const BRAND = {
+  ink:      '191A3E',   // deep indigo, header bands
+  ink2:     '2B2C63',   // subheads
+  accent:   '0E8C8B',   // teal
+  cream:    'F5F0E6',
+  paper:    'FFFFFF',
+  rule:     'D8D6CE',
+  soft:     'F4F3F0',
+  headFont: 'Space Grotesk',
+  bodyFont: 'IBM Plex Sans',
+  monoFont: 'IBM Plex Mono',
+  good: { bg:'E6F4E6', fg:'0A6B0A' },
+  ni:   { bg:'FDF3DC', fg:'8A5A00' },
+  poor: { bg:'FBE7E7', fg:'A32424' }
+};
+
+/* Display unit per metric column. Milliseconds read badly in a spreadsheet past
+   a second, so the long metrics are written as seconds and the thresholds are
+   converted with them. */
+const SHEET_COLS = [
+  { key:'perf', label:'Performance', unit:'score', width:104 },
+  { key:'lcp',  label:'LCP',         unit:'s',     width:84 },
+  { key:'cls',  label:'CLS',         unit:'num',   width:84 },
+  { key:'tbt',  label:'TBT',         unit:'ms',    width:92 },
+  { key:'fcp',  label:'FCP',         unit:'s',     width:84 },
+  { key:'ttfb', label:'TTFB',        unit:'ms',    width:92 },
+  { key:'si',   label:'Speed Index', unit:'s',     width:104 }
+];
+const NUMFMT = { score:'0', s:'0.00" s"', ms:'#,##0" ms"', num:'0.000' };
+function toDisplay(colKey, v){
+  if(v == null || !isFinite(v)) return null;
+  const c = SHEET_COLS.find(x => x.key === colKey);
+  return c && c.unit === 's' ? v / 1000 : v;
+}
+function colThresholds(colKey){
+  const m = METRICS[colKey], c = SHEET_COLS.find(x => x.key === colKey);
+  const f = (c && c.unit === 's') ? 1000 : 1;
+  return { good: m.good / f, ni: m.ni / f, higher: !!m.higher };
+}
+
+function reportTitle(){
+  const client = ($('#clientName') && $('#clientName').value.trim()) || '';
+  const subject = state.sites.map(s => s.label).join(' vs ');
+  return 'PageSpeed audit ' + (client ? client + ' ' : '') + subject;
+}
+
+/* --- the model ----------------------------------------------------------- */
+function buildReportModel(){
+  const client = ($('#clientName') && $('#clientName').value.trim()) || '';
+  const strategies = uniq(state.results.map(r => r.strategy));
+  const ok = state.results.filter(r => r.ok);
+  const failed = state.results.filter(r => !r.ok);
+  const tabs = [];
+  let n = 0;
+  const tab = (title, t) => { tabs.push(Object.assign({ name: (n++) + ' ' + title }, t)); };
+
+  /* 0 Method. Context and Sources are the two sections Jake's audit template
+     always carries, so they lead. */
+  const params = [
+    ['Sites measured', state.sites.map(s => s.origin).join(', ')],
+    ['Sampling', 'Up to ' + clampInt($('#perGroup').value,1,10,10) + ' URLs per collection, ' +
+                 clampInt($('#totalCap').value,1,100,100) + ' per site maximum'],
+    ['Strategies', strategies.join(' and ')],
+    ['Pages measured', String(uniq(ok.map(r => r.url)).length)],
+    ['Measurements taken', String(ok.length) + (failed.length ? ' (' + failed.length + ' failed)' : '')],
+    ['Lighthouse categories', $('#allCats').checked ? 'Performance, accessibility, best practices, SEO' : 'Performance']
+  ];
+  if(state.compareGroups.length && multi()){
+    params.push(['Paired collections', state.compareGroups.map(g =>
+      g.label + ' = ' + state.sites.map(s => g.map[s.origin] ? s.label + ' /' + g.map[s.origin] : null).filter(Boolean).join(' vs ')
+    ).join('; ')]);
+  }
+  tab('Method', { kind:'doc', blocks: [
+    { h:'Context', p: (client ? 'Prepared for ' + client + '. ' : '') +
+      'This measures loading performance across a representative sample of ' +
+      (multi() ? state.sites.length + ' sites' : state.sites[0].label) +
+      ', not every page. Pages are sampled per collection so the figures describe the site as a whole rather than whichever pages happen to be fastest.' },
+    { h:'Sources', p: 'Google PageSpeed Insights API v5, which runs Lighthouse on Google\'s infrastructure. Where Google holds Chrome User Experience Report data for a URL, the real-user figures are reported alongside the lab ones and labelled as field data. URL inventory comes from each site\'s own XML sitemap.' },
+    { h:'Scope', rows: params },
+    { h:'Assumptions', p: 'Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ, so a site with few measured pages carries a wider error bar. Thresholds are Google\'s published Core Web Vitals bands, listed on the glossary tab.' },
+    { h:'Prepared by', p: 'Jake Labate, SEO Consultant. Generated ' + new Date().toLocaleString() + '.' }
+  ]});
+
+  /* 1 Summary */
+  for(const strat of strategies){
+    const rs = ok.filter(r => r.strategy === strat);
+    if(!rs.length) continue;
+    const working = [], needs = [];
+    for(const c of SHEET_COLS){
+      const m = mean(rs.map(r => r.data[c.key]));
+      const g = grade(c.key, m);
+      const line = [c.label, fmt(c.key, m), GRADE_LABEL[g]];
+      (g === 'good' ? working : needs).push(line);
+    }
+    tab('Summary ' + strat, { kind:'summary', strategy: strat,
+      headline: SHEET_COLS.map(c => ({
+        label: c.label, key: c.key,
+        value: toDisplay(c.key, mean(rs.map(r => r.data[c.key]))),
+        median: toDisplay(c.key, median(rs.map(r => r.data[c.key])))
+      })),
+      working, needs, pages: uniq(rs.map(r => r.url)).length });
+    break;   // one summary tab, on the first strategy
+  }
+
+  const metricHeaders = SHEET_COLS.map(c => c.label);
+  const metricKeys = SHEET_COLS.map(c => c.key);
+
+  /* 2 Site comparison, 3 Key pages, 4 Paired collections: multi-site only */
+  if(multi()){
+    const rows = [];
+    for(const strat of strategies){
+      for(const site of state.sites){
+        const rs = ok.filter(r => r.strategy === strat && r.site === site.origin);
+        if(!rs.length) continue;
+        rows.push([strat, site.label + (site.primary ? ' (yours)' : ''), rs.length]
+          .concat(metricKeys.map(k => toDisplay(k, mean(rs.map(r => r.data[k]))))));
+      }
+    }
+    tab('Site comparison', { kind:'table', headers:['Strategy','Site','Pages'].concat(metricHeaders),
+      metricAt: 3, rows, widths:[92,190,64], note:'Mean across each site\'s own sample. The first site listed in the run is the baseline.' });
+
+    const roleRows = [];
+    const roles = uniq(ok.filter(r => r.key).map(r => r.key));
+    for(const strat of strategies){
+      for(const role of roles){
+        const perSite = state.sites.map(site => ok.find(r => r.strategy === strat && r.site === site.origin && r.key === role));
+        if(perSite.filter(Boolean).length < 2) continue;
+        roleRows.push([strat, role].concat(state.sites.map(site => {
+          const r = perSite[state.sites.indexOf(site)];
+          return r ? toDisplay('perf', r.data.perf) : null;
+        })).concat(state.sites.map(site => {
+          const r = perSite[state.sites.indexOf(site)];
+          return r ? toDisplay('lcp', r.data.lcp) : null;
+        })));
+      }
+    }
+    if(roleRows.length){
+      tab('Key pages', { kind:'table',
+        headers:['Strategy','Page role'].concat(state.sites.map(s => s.label + ' score'))
+                                        .concat(state.sites.map(s => s.label + ' LCP')),
+        cols: [null, null].concat(state.sites.map(() => 'perf')).concat(state.sites.map(() => 'lcp')),
+        rows: roleRows, widths:[92,140], note:'Like for like by page role. A blank cell means that site has no page in this role.' });
+    }
+
+    const pairRows = [];
+    for(const strat of strategies){
+      for(const g of state.compareGroups){
+        for(const site of state.sites){
+          const cname = g.map[site.origin];
+          if(!cname) continue;
+          const rs = ok.filter(r => r.strategy === strat && r.site === site.origin && r.collection === cname);
+          if(!rs.length) continue;
+          pairRows.push([strat, g.label, site.label + (site.primary ? ' (yours)' : ''), '/' + cname, rs.length]
+            .concat(metricKeys.map(k => toDisplay(k, mean(rs.map(r => r.data[k]))))));
+        }
+      }
+    }
+    if(pairRows.length){
+      tab('Paired collections', { kind:'table',
+        headers:['Strategy','Pairing','Site','Collection','Pages'].concat(metricHeaders),
+        metricAt: 5, rows: pairRows, widths:[92,130,160,150,64],
+        note:'Collections paired across sites by hand or by name. Pairings are listed on the method tab.' });
+    }
+  }
+
+  /* Collections */
+  const colRows = [];
+  for(const strat of strategies){
+    const seen = new Map();
+    ok.filter(r => r.strategy === strat).forEach(r => {
+      const k = r.siteLabel + '|' + r.collection;
+      if(!seen.has(k)) seen.set(k, []);
+      seen.get(k).push(r);
+    });
+    for(const [k, rs] of seen){
+      const [siteLabel, coll] = k.split('|');
+      colRows.push([strat, siteLabel, coll, rs.length]
+        .concat(metricKeys.map(mk => toDisplay(mk, mean(rs.map(r => r.data[mk]))))));
+    }
+  }
+  tab('Collections', { kind:'table', headers:['Strategy','Site','Collection','Pages'].concat(metricHeaders),
+    metricAt: 4, rows: colRows, widths:[92,150,170,64] });
+
+  /* Every page */
+  const extra = ['a11y','bp','seo'].filter(k => ok.some(r => r.data[k] != null));
+  const pageRows = ok.map(r => [r.strategy, r.siteLabel, r.collection, r.key || '', r.path, r.url]
+    .concat(metricKeys.map(k => toDisplay(k, r.data[k])))
+    .concat(extra.map(k => r.data[k] != null ? r.data[k] : null)));
+  tab('All pages', { kind:'table',
+    headers:['Strategy','Site','Collection','Role','Path','URL'].concat(metricHeaders)
+            .concat(extra.map(k => METRICS[k].label)),
+    metricAt: 6, extraKeys: extra, monoCols:[4,5], rows: pageRows,
+    widths:[92,140,140,90,260,320] });
+
+  /* Failures */
+  if(failed.length){
+    tab('Failures', { kind:'table', headers:['Strategy','Site','Path','Reason'],
+      rows: failed.map(r => [r.strategy, r.siteLabel, r.path, r.error || '']),
+      widths:[92,140,260,460], monoCols:[2],
+      note:'A 500 from PageSpeed usually means Google\'s Lighthouse pool was saturated at that moment rather than a problem with the page.' });
+  }
+
+  /* Glossary and rubric */
+  const rubric = SHEET_COLS.map(c => {
+    const m = METRICS[c.key];
+    const u = c.unit === 's' ? ' s' : c.unit === 'ms' ? ' ms' : '';
+    const f = c.unit === 's' ? 1000 : 1;
+    const g = (m.good / f) + u, ni = (m.ni / f) + u;
+    return [c.label, GLOSSARY[c.key] || '',
+      m.higher ? m.good + ' or above'          : g + ' or below',
+      m.higher ? m.ni + ' to ' + (m.good - 1)  : 'over ' + g + ', up to ' + ni,
+      m.higher ? 'below ' + m.ni               : 'over ' + ni];
+  });
+  tab('Glossary and rubric', { kind:'table', headers:['Metric','What it measures','Good','Needs work','Poor'],
+    rows: rubric, widths:[130,430,150,170,150], noBand:true,
+    note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100.' });
+
+  return { title: reportTitle(), client, strategies, tabs };
+}
+
+const GLOSSARY = {
+  perf: 'Lighthouse performance score, a weighted composite of the lab metrics below.',
+  lcp:  'Largest Contentful Paint. When the biggest element in the viewport finished rendering. A Core Web Vital.',
+  cls:  'Cumulative Layout Shift. How much visible content moves around unexpectedly while loading. A Core Web Vital.',
+  tbt:  'Total Blocking Time. How long the main thread was blocked and unable to respond to input. The lab proxy for INP.',
+  fcp:  'First Contentful Paint. When the first text or image appeared.',
+  ttfb: 'Time to First Byte. Server response time before the browser received anything.',
+  si:   'Speed Index. How quickly content is visually populated during load.'
+};
+
+/* --- Excel writer -------------------------------------------------------- */
+function argb(hex){ return 'FF' + hex; }
+const chW = px => Math.max(8, Math.round(px / 7));
+
+function styleFillFont(bg, fg, opts){
+  return {
+    fill: { type:'pattern', pattern:'solid', fgColor:{ argb: argb(bg) } },
+    font: Object.assign({ color:{ argb: argb(fg) }, name: BRAND.bodyFont, size: 10 }, opts || {})
+  };
+}
+
+async function buildXlsx(model){
+  if(typeof ExcelJS === 'undefined') throw new Error('The Excel library did not load. Check your connection and try again.');
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Jake Labate, SEO Consultant';
+  wb.created = new Date();
+
+  for(const t of model.tabs){
+    const ws = wb.addWorksheet(t.name.slice(0, 31), {
+      properties: { tabColor: { argb: argb(BRAND.accent) }, defaultRowHeight: 18 },
+      views: [{ showGridLines: false }],
+      pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+                   orientation: t.kind === 'doc' ? 'portrait' : 'landscape',
+                   margins: { left:0.4, right:0.4, top:0.5, bottom:0.5, header:0.2, footer:0.2 } }
+    });
+
+    // title band
+    const lastCol = t.kind === 'summary' ? 6 : t.kind === 'doc' ? 5 : t.headers.length;
+    ws.mergeCells(1, 1, 1, lastCol);
+    const title = ws.getCell(1, 1);
+    title.value = model.title;
+    title.style = styleFillFont(BRAND.ink, 'FFFFFF', { name: BRAND.headFont, size: 14, bold: true });
+    ws.getRow(1).height = 30;
+    ws.mergeCells(2, 1, 2, lastCol);
+    const sub = ws.getCell(2, 1);
+    sub.value = t.name.replace(/^(\d+)\s/, 'Section $1  ');
+    sub.style = styleFillFont(BRAND.ink2, 'FFFFFF', { name: BRAND.monoFont, size: 9, bold: true });
+    ws.getRow(2).height = 20;
+
+    let r = 4;
+
+    if(t.kind === 'doc'){
+      ws.getColumn(1).width = 26;
+      ws.getColumn(2).width = 78;
+      for(const b of t.blocks){
+        ws.mergeCells(r, 1, r, lastCol);
+        const hc = ws.getCell(r, 1);
+        hc.value = b.h;
+        hc.style = styleFillFont(BRAND.soft, BRAND.ink, { name: BRAND.headFont, size: 11, bold: true });
+        r++;
+        if(b.p){
+          ws.mergeCells(r, 1, r, lastCol);
+          const pc = ws.getCell(r, 1);
+          pc.value = b.p;
+          pc.alignment = { wrapText: true, vertical: 'top' };
+          pc.font = { name: BRAND.bodyFont, size: 10 };
+          ws.getRow(r).height = Math.min(110, 16 + Math.ceil(b.p.length / 110) * 14);
+          r++;
+        }
+        if(b.rows){
+          for(const [k, v] of b.rows){
+            ws.getCell(r, 1).value = k;
+            ws.getCell(r, 1).font = { name: BRAND.monoFont, size: 9, color:{ argb: argb(BRAND.ink2) }, bold: true };
+            ws.getCell(r, 1).alignment = { vertical:'top' };
+            ws.mergeCells(r, 2, r, lastCol);
+            ws.getCell(r, 2).value = v;
+            ws.getCell(r, 2).font = { name: BRAND.bodyFont, size: 10 };
+            ws.getCell(r, 2).alignment = { wrapText: true, vertical:'top' };
+            ws.getRow(r).height = Math.min(90, 16 + Math.ceil(String(v).length / 100) * 14);
+            r++;
+          }
+        }
+        r++;
+      }
+      continue;
+    }
+
+    if(t.kind === 'summary'){
+      ws.getColumn(1).width = 22; ws.getColumn(2).width = 16; ws.getColumn(3).width = 16;
+      ws.getColumn(4).width = 4;  ws.getColumn(5).width = 22; ws.getColumn(6).width = 44;
+      ws.getCell(r, 1).value = 'Headline, ' + t.strategy + ', ' + t.pages + ' pages measured';
+      ws.getCell(r, 1).font = { name: BRAND.headFont, size: 11, bold: true, color:{ argb: argb(BRAND.ink) } };
+      r += 2;
+      ['Metric','Mean','Median'].forEach((h, i) => {
+        const c = ws.getCell(r, i + 1); c.value = h;
+        c.style = styleFillFont(BRAND.ink, 'FFFFFF', { name: BRAND.headFont, bold: true, size: 10 });
+      });
+      r++;
+      const firstData = r;
+      for(const h of t.headline){
+        ws.getCell(r, 1).value = h.label;
+        ws.getCell(r, 1).font = { name: BRAND.bodyFont, size: 10, bold: true };
+        const col = SHEET_COLS.find(c => c.key === h.key);
+        [h.value, h.median].forEach((v, i) => {
+          const c = ws.getCell(r, i + 2);
+          c.value = v;
+          c.numFmt = NUMFMT[col.unit];
+          c.font = { name: BRAND.bodyFont, size: 10 };
+          c.alignment = { horizontal: 'right' };
+        });
+        applyXlsxRule(ws, h.key, r, 2, r, 2);
+        r++;
+      }
+      let r2 = firstData - 1;
+      ws.getCell(r2, 5).value = 'What is working';
+      ws.getCell(r2, 5).style = styleFillFont(BRAND.good.bg, BRAND.good.fg, { bold: true, size: 9 });
+      ws.getCell(r2, 6).value = '';
+      ws.getCell(r2, 6).style = styleFillFont(BRAND.good.bg, BRAND.good.fg, { bold: true, size: 9 });
+      r2++;
+      for(const [label, value] of (t.working.length ? t.working : [['Nothing yet', 'Every metric is outside the good band']])){
+        ws.getCell(r2, 5).value = label; ws.getCell(r2, 5).font = { name: BRAND.bodyFont, size: 10, bold: true };
+        ws.getCell(r2, 6).value = value; ws.getCell(r2, 6).font = { name: BRAND.bodyFont, size: 10 };
+        r2++;
+      }
+      r2++;
+      ws.getCell(r2, 5).value = 'What needs work';
+      ws.getCell(r2, 5).style = styleFillFont(BRAND.poor.bg, BRAND.poor.fg, { bold: true, size: 9 });
+      ws.getCell(r2, 6).value = '';
+      ws.getCell(r2, 6).style = styleFillFont(BRAND.poor.bg, BRAND.poor.fg, { bold: true, size: 9 });
+      r2++;
+      for(const [label, value, band] of (t.needs.length ? t.needs : [['Nothing', 'Every metric is in the good band']])){
+        ws.getCell(r2, 5).value = label; ws.getCell(r2, 5).font = { name: BRAND.bodyFont, size: 10, bold: true };
+        ws.getCell(r2, 6).value = value + (band ? '  (' + band + ')' : '');
+        ws.getCell(r2, 6).font = { name: BRAND.bodyFont, size: 10 };
+        r2++;
+      }
+      continue;
+    }
+
+    // table
+    if(t.note){
+      ws.mergeCells(r, 1, r, t.headers.length);
+      const nc = ws.getCell(r, 1);
+      nc.value = t.note;
+      nc.font = { name: BRAND.bodyFont, size: 9, italic: true, color:{ argb: argb('6B6A66') } };
+      nc.alignment = { wrapText: true, vertical:'top' };
+      ws.getRow(r).height = 26;
+      r += 2;
+    }
+    const headRow = r;
+    t.headers.forEach((h, i) => {
+      const c = ws.getCell(headRow, i + 1);
+      c.value = h;
+      c.style = styleFillFont(BRAND.ink, 'FFFFFF', { name: BRAND.headFont, bold: true, size: 10 });
+      c.alignment = { wrapText: true, vertical:'middle', horizontal: i >= (t.metricAt ?? 99) ? 'right' : 'left' };
+    });
+    ws.getRow(headRow).height = 26;
+    ws.views = [{ state:'frozen', ySplit: headRow, showGridLines: false }];
+    ws.pageSetup.printTitlesRow = headRow + ':' + headRow;
+    r++;
+
+    const firstDataRow = r;
+    t.rows.forEach((row, ri) => {
+      row.forEach((v, ci) => {
+        const c = ws.getCell(r, ci + 1);
+        c.value = (v === null || v === undefined || v === '') ? null : v;
+        const mono = (t.monoCols || []).includes(ci);
+        c.font = { name: mono ? BRAND.monoFont : BRAND.bodyFont, size: mono ? 9 : 10 };
+        const key = metricKeyForCol(t, ci);
+        if(key){
+          const col = SHEET_COLS.find(x => x.key === key);
+          c.numFmt = col ? NUMFMT[col.unit] : (METRICS[key].unit === 'score' ? '0' : '0.00');
+          c.alignment = { horizontal: 'right' };
+        }
+      });
+      if(!t.noBand && ri % 2 === 1){
+        for(let ci = 1; ci <= t.headers.length; ci++){
+          const c = ws.getCell(r, ci);
+          if(!c.fill || c.fill.type !== 'pattern') c.fill = { type:'pattern', pattern:'solid', fgColor:{ argb: argb(BRAND.soft) } };
+        }
+      }
+      r++;
+    });
+    const lastDataRow = r - 1;
+
+    (t.widths || []).forEach((w, i) => { ws.getColumn(i + 1).width = chW(w); });
+    for(let ci = 0; ci < t.headers.length; ci++){
+      if(!ws.getColumn(ci + 1).width) ws.getColumn(ci + 1).width = chW(96);
+      const key = metricKeyForCol(t, ci);
+      if(key && lastDataRow >= firstDataRow) applyXlsxRule(ws, key, firstDataRow, ci + 1, lastDataRow, ci + 1);
+    }
+    if(!t.noBand) ws.autoFilter = { from: { row: headRow, column: 1 }, to: { row: Math.max(headRow, lastDataRow), column: t.headers.length } };
+  }
+
+  const buf = await wb.xlsx.writeBuffer();
+  return new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+/* Which metric, if any, a column holds. Tables either declare a per-column map
+   or start their metric block at metricAt and run through SHEET_COLS. */
+function metricKeyForCol(t, ci){
+  if(t.cols) return t.cols[ci] || null;
+  if(t.metricAt == null) return null;
+  const idx = ci - t.metricAt;
+  if(idx < 0) return null;
+  if(idx < SHEET_COLS.length) return SHEET_COLS[idx].key;
+  const ex = (t.extraKeys || [])[idx - SHEET_COLS.length];
+  return ex || null;
+}
+
+function colLetter(n){ let s = ''; while(n > 0){ const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - 1) / 26); } return s; }
+
+function applyXlsxRule(ws, key, r1, c1, r2, c2){
+  const th = colThresholds(key);
+  const ref = colLetter(c1) + r1 + ':' + colLetter(c2) + r2;
+  const st = b => ({ fill:{ type:'pattern', pattern:'solid', bgColor:{ argb: argb(b.bg) } },
+                     font:{ color:{ argb: argb(b.fg) }, bold: true } });
+  const rules = th.higher
+    ? [ { operator:'greaterThanOrEqual', formulae:[String(th.good)], style: st(BRAND.good) },
+        { operator:'greaterThanOrEqual', formulae:[String(th.ni)],   style: st(BRAND.ni) },
+        { operator:'lessThan',           formulae:[String(th.ni)],   style: st(BRAND.poor) } ]
+    : [ { operator:'lessThanOrEqual',    formulae:[String(th.good)], style: st(BRAND.good) },
+        { operator:'lessThanOrEqual',    formulae:[String(th.ni)],   style: st(BRAND.ni) },
+        { operator:'greaterThan',        formulae:[String(th.ni)],   style: st(BRAND.poor) } ];
+  ws.addConditionalFormatting({ ref, rules: rules.map((r, i) => Object.assign({ type:'cellIs', priority: i + 1 }, r)) });
+}
+
 /* ------------------------------------------------------------- exporting */
 const AVG_KEYS = ['perf','lcp','cls','tbt','fcp','si','ttfb'];
 function avgOf(rs, fn){ return Object.fromEntries(AVG_KEYS.map(k => [k, fn(rs.map(r => r.data[k]))])); }
@@ -1824,6 +2292,305 @@ $('#dlJson').addEventListener('click', () => {
   }, null, 2), 'application/json');
 });
 $('#resStrategy').addEventListener('change', renderResults);
+
+/* --- Google Sheets writer ------------------------------------------------ */
+/* Three calls: create the tabs, push values as plain arrays (far smaller than
+   per-cell objects), then one batchUpdate carrying every format. */
+function rgb(hex){
+  return { red: parseInt(hex.slice(0,2),16)/255, green: parseInt(hex.slice(2,4),16)/255, blue: parseInt(hex.slice(4,6),16)/255 };
+}
+const txt = (opts) => Object.assign({ fontFamily: BRAND.bodyFont, fontSize: 10 }, opts || {});
+
+let gsiToken = null;
+function gsiAuth(clientId){
+  return new Promise((resolve, reject) => {
+    if(typeof google === 'undefined' || !google.accounts || !google.accounts.oauth2){
+      reject(new Error('Google sign-in did not load. Check your connection, or use the Excel export instead.'));
+      return;
+    }
+    try{
+      const tc = google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: 'https://www.googleapis.com/auth/drive.file',
+        callback: resp => {
+          if(resp && resp.access_token){ gsiToken = resp.access_token; resolve(resp.access_token); }
+          else reject(new Error('Authorisation was cancelled or returned no token.'));
+        },
+        error_callback: err => reject(new Error('Google sign-in failed: ' + ((err && (err.type || err.message)) || 'unknown') +
+          '. Check that ' + location.origin + ' is an authorised JavaScript origin on this OAuth client.'))
+      });
+      tc.requestAccessToken({ prompt: gsiToken ? '' : 'consent' });
+    }catch(e){ reject(e); }
+  });
+}
+
+async function gapi(url, method, body, token){
+  const r = await fetch(url, {
+    method,
+    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined
+  });
+  const j = await r.json().catch(() => null);
+  if(!r.ok){
+    const msg = j && j.error && j.error.message ? j.error.message : ('HTTP ' + r.status);
+    throw new Error(msg);
+  }
+  return j;
+}
+
+function tabGrid(t){
+  if(t.kind === 'doc'){
+    const rows = [[t.name.replace(/^(\d+)\s/, 'Section $1  ')], []];
+    for(const b of t.blocks){
+      rows.push([b.h]);
+      if(b.p) rows.push(['', b.p]);
+      if(b.rows) b.rows.forEach(([k, v]) => rows.push([k, v]));
+      rows.push([]);
+    }
+    return rows;
+  }
+  if(t.kind === 'summary'){
+    const rows = [['Headline, ' + t.strategy + ', ' + t.pages + ' pages measured'], [],
+                  ['Metric','Mean','Median','', 'What is working','']];
+    const maxLen = Math.max(t.headline.length, t.working.length + t.needs.length + 3);
+    const right = [];
+    (t.working.length ? t.working : [['Nothing yet','Every metric is outside the good band']])
+      .forEach(([a, b]) => right.push([a, b]));
+    right.push(['', '']);
+    right.push(['What needs work', '']);
+    (t.needs.length ? t.needs : [['Nothing','Every metric is in the good band']])
+      .forEach(([a, b, band]) => right.push([a, b + (band ? '  (' + band + ')' : '')]));
+    for(let i = 0; i < Math.max(t.headline.length, right.length); i++){
+      const h = t.headline[i], rt = right[i] || ['', ''];
+      rows.push([h ? h.label : '', h ? h.value : '', h ? h.median : '', '', rt[0], rt[1]]);
+    }
+    return rows;
+  }
+  const rows = [];
+  if(t.note) rows.push([t.note], []);
+  rows.push(t.headers);
+  t.rows.forEach(r => rows.push(r.map(v => (v === null || v === undefined) ? '' : v)));
+  return rows;
+}
+function headerRowIndex(t){
+  if(t.kind === 'doc') return 2;
+  if(t.kind === 'summary') return 3;
+  return t.note ? 3 : 1;
+}
+
+async function createGoogleSheet(model, token){
+  const note = m => { $('#reportNote').innerHTML = '<div class="note">' + m + '</div>'; };
+
+  note('Creating the spreadsheet…');
+  const created = await gapi('https://sheets.googleapis.com/v4/spreadsheets', 'POST', {
+    properties: { title: model.title, locale: 'en_US' },
+    sheets: model.tabs.map((t, i) => ({
+      properties: {
+        sheetId: i, title: t.name.slice(0, 90), index: i,
+        tabColor: rgb(i === 0 ? BRAND.ink : BRAND.accent),
+        gridProperties: {
+          rowCount: Math.max(40, tabGrid(t).length + 6),
+          columnCount: Math.max(8, (t.headers ? t.headers.length : 6) + 1),
+          frozenRowCount: headerRowIndex(t)
+        }
+      }
+    }))
+  }, token);
+  const id = created.spreadsheetId;
+
+  note('Writing the data…');
+  const valueRanges = model.tabs.map((t, i) => ({
+    range: "'" + t.name.slice(0, 90).replace(/'/g, "''") + "'!A1",
+    majorDimension: 'ROWS',
+    values: tabGrid(t)
+  }));
+  await gapi('https://sheets.googleapis.com/v4/spreadsheets/' + id + '/values:batchUpdate', 'POST',
+    { valueInputOption: 'RAW', data: valueRanges }, token);
+
+  note('Applying the formatting…');
+  const reqs = [];
+  model.tabs.forEach((t, sheetId) => {
+    const grid = tabGrid(t);
+    const nCols = Math.max(6, (t.headers ? t.headers.length : 6));
+    const hIdx = headerRowIndex(t);
+
+    // whole sheet: body font, no gridlines
+    reqs.push({ repeatCell: { range: { sheetId },
+      cell: { userEnteredFormat: { textFormat: txt(), verticalAlignment: 'TOP', wrapStrategy: 'CLIP' } },
+      fields: 'userEnteredFormat(textFormat,verticalAlignment,wrapStrategy)' } });
+    reqs.push({ updateSheetProperties: { properties: { sheetId, gridProperties: { hideGridlines: true } },
+      fields: 'gridProperties.hideGridlines' } });
+
+    if(t.kind === 'doc' || t.kind === 'summary'){
+      // title line
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: 0, endRowIndex: 1 },
+        cell: { userEnteredFormat: { backgroundColor: rgb(BRAND.ink),
+          textFormat: txt({ fontFamily: BRAND.headFont, fontSize: 13, bold: true, foregroundColor: rgb('FFFFFF') }) } },
+        fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'ROWS', startIndex:0, endIndex:1 },
+        properties: { pixelSize: 34 }, fields:'pixelSize' } });
+    }
+
+    if(t.kind === 'doc'){
+      grid.forEach((row, ri) => {
+        if(ri === 0 || !row.length) return;
+        const isHeading = row.length === 1 && row[0];
+        if(isHeading){
+          reqs.push({ repeatCell: { range: { sheetId, startRowIndex: ri, endRowIndex: ri + 1, startColumnIndex: 0, endColumnIndex: nCols },
+            cell: { userEnteredFormat: { backgroundColor: rgb(BRAND.soft),
+              textFormat: txt({ fontFamily: BRAND.headFont, fontSize: 11, bold: true, foregroundColor: rgb(BRAND.ink) }) } },
+            fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
+        } else {
+          reqs.push({ repeatCell: { range: { sheetId, startRowIndex: ri, endRowIndex: ri + 1, startColumnIndex: 0, endColumnIndex: 1 },
+            cell: { userEnteredFormat: { textFormat: txt({ fontFamily: BRAND.monoFont, fontSize: 9, bold: true, foregroundColor: rgb(BRAND.ink2) }) } },
+            fields: 'userEnteredFormat.textFormat' } });
+          reqs.push({ repeatCell: { range: { sheetId, startRowIndex: ri, endRowIndex: ri + 1, startColumnIndex: 1, endColumnIndex: 2 },
+            cell: { userEnteredFormat: { wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat.wrapStrategy' } });
+        }
+      });
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:0, endIndex:1 }, properties:{ pixelSize: 190 }, fields:'pixelSize' } });
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:1, endIndex:2 }, properties:{ pixelSize: 760 }, fields:'pixelSize' } });
+      return;
+    }
+
+    if(t.kind === 'summary'){
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 0, endColumnIndex: 3 },
+        cell: { userEnteredFormat: { backgroundColor: rgb(BRAND.ink2),
+          textFormat: txt({ bold: true, fontSize: 9, foregroundColor: rgb('FFFFFF') }) } },
+        fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex: 2, endRowIndex: 3, startColumnIndex: 4, endColumnIndex: 6 },
+        cell: { userEnteredFormat: { backgroundColor: rgb(BRAND.good.bg),
+          textFormat: txt({ bold: true, fontSize: 9, foregroundColor: rgb(BRAND.good.fg) }) } },
+        fields: 'userEnteredFormat(backgroundColor,textFormat)' } });
+      t.headline.forEach((h, i) => {
+        const col = SHEET_COLS.find(c => c.key === h.key);
+        const rowIdx = 3 + i;
+        reqs.push({ repeatCell: { range: { sheetId, startRowIndex: rowIdx, endRowIndex: rowIdx + 1, startColumnIndex: 1, endColumnIndex: 3 },
+          cell: { userEnteredFormat: { horizontalAlignment: 'RIGHT',
+            numberFormat: { type:'NUMBER', pattern: NUMFMT[col.unit] } } },
+          fields: 'userEnteredFormat(horizontalAlignment,numberFormat)' } });
+        pushCondRules(reqs, sheetId, h.key, rowIdx, rowIdx + 1, 1, 2);
+      });
+      [[0,180],[1,110],[2,110],[3,24],[4,190],[5,420]].forEach(([i, px]) =>
+        reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:i, endIndex:i+1 }, properties:{ pixelSize: px }, fields:'pixelSize' } }));
+      reqs.push({ repeatCell: { range: { sheetId, startColumnIndex: 5, endColumnIndex: 6 },
+        cell: { userEnteredFormat: { wrapStrategy: 'WRAP' } }, fields: 'userEnteredFormat.wrapStrategy' } });
+      return;
+    }
+
+    // ---- table tabs
+    if(t.note){
+      reqs.push({ mergeCells: { range: { sheetId, startRowIndex:0, endRowIndex:1, startColumnIndex:0, endColumnIndex:nCols }, mergeType:'MERGE_ALL' } });
+      reqs.push({ repeatCell: { range: { sheetId, startRowIndex:0, endRowIndex:1, startColumnIndex:0, endColumnIndex:nCols },
+        cell: { userEnteredFormat: { wrapStrategy:'WRAP',
+          textFormat: txt({ italic: true, fontSize: 9, foregroundColor: rgb('6B6A66') }) } },
+        fields: 'userEnteredFormat(wrapStrategy,textFormat)' } });
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'ROWS', startIndex:0, endIndex:1 }, properties:{ pixelSize: 34 }, fields:'pixelSize' } });
+    }
+    const hRow = hIdx - 1;
+    reqs.push({ repeatCell: { range: { sheetId, startRowIndex: hRow, endRowIndex: hRow + 1, startColumnIndex: 0, endColumnIndex: t.headers.length },
+      cell: { userEnteredFormat: { backgroundColor: rgb(BRAND.ink),
+        textFormat: txt({ fontFamily: BRAND.headFont, bold: true, fontSize: 10, foregroundColor: rgb('FFFFFF') }),
+        verticalAlignment: 'MIDDLE', wrapStrategy: 'WRAP' } },
+      fields: 'userEnteredFormat(backgroundColor,textFormat,verticalAlignment,wrapStrategy)' } });
+    reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'ROWS', startIndex: hRow, endIndex: hRow + 1 }, properties:{ pixelSize: 30 }, fields:'pixelSize' } });
+
+    const first = hIdx, last = hIdx + t.rows.length;
+    if(t.rows.length){
+      if(!t.noBand){
+        reqs.push({ addBanding: { bandedRange: {
+          range: { sheetId, startRowIndex: first, endRowIndex: last, startColumnIndex: 0, endColumnIndex: t.headers.length },
+          rowProperties: { firstBandColor: rgb('FFFFFF'), secondBandColor: rgb(BRAND.soft) } } } });
+      }
+      (t.monoCols || []).forEach(ci => {
+        reqs.push({ repeatCell: { range: { sheetId, startRowIndex: first, endRowIndex: last, startColumnIndex: ci, endColumnIndex: ci + 1 },
+          cell: { userEnteredFormat: { textFormat: txt({ fontFamily: BRAND.monoFont, fontSize: 9 }) } },
+          fields: 'userEnteredFormat.textFormat' } });
+      });
+      for(let ci = 0; ci < t.headers.length; ci++){
+        const key = metricKeyForCol(t, ci);
+        if(!key) continue;
+        const col = SHEET_COLS.find(x => x.key === key);
+        reqs.push({ repeatCell: { range: { sheetId, startRowIndex: first, endRowIndex: last, startColumnIndex: ci, endColumnIndex: ci + 1 },
+          cell: { userEnteredFormat: { horizontalAlignment: 'RIGHT',
+            numberFormat: { type:'NUMBER', pattern: col ? NUMFMT[col.unit] : '0' } } },
+          fields: 'userEnteredFormat(horizontalAlignment,numberFormat)' } });
+        pushCondRules(reqs, sheetId, key, first, last, ci, ci + 1);
+      }
+      if(!t.noBand) reqs.push({ setBasicFilter: { filter: { range: { sheetId, startRowIndex: hRow, endRowIndex: last, startColumnIndex: 0, endColumnIndex: t.headers.length } } } });
+    }
+    (t.widths || []).forEach((px, i) =>
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:i, endIndex:i+1 }, properties:{ pixelSize: px }, fields:'pixelSize' } }));
+    for(let ci = (t.widths || []).length; ci < t.headers.length; ci++){
+      reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:ci, endIndex:ci+1 }, properties:{ pixelSize: 104 }, fields:'pixelSize' } });
+    }
+  });
+
+  // batchUpdate has a request ceiling; send in chunks
+  for(let i = 0; i < reqs.length; i += 200){
+    await gapi('https://sheets.googleapis.com/v4/spreadsheets/' + id + ':batchUpdate', 'POST',
+      { requests: reqs.slice(i, i + 200) }, token);
+  }
+  return 'https://docs.google.com/spreadsheets/d/' + id + '/edit';
+}
+
+function pushCondRules(reqs, sheetId, key, r1, r2, c1, c2){
+  const th = colThresholds(key);
+  const range = { sheetId, startRowIndex: r1, endRowIndex: r2, startColumnIndex: c1, endColumnIndex: c2 };
+  const fmt = b => ({ backgroundColor: rgb(b.bg), textFormat: { foregroundColor: rgb(b.fg), bold: true } });
+  const cond = (type, v) => ({ type, values: [{ userEnteredValue: String(v) }] });
+  const rules = th.higher
+    ? [ [cond('NUMBER_GREATER_THAN_EQ', th.good), BRAND.good],
+        [cond('NUMBER_GREATER_THAN_EQ', th.ni),   BRAND.ni],
+        [cond('NUMBER_LESS_THAN',       th.ni),   BRAND.poor] ]
+    : [ [cond('NUMBER_LESS_THAN_EQ',    th.good), BRAND.good],
+        [cond('NUMBER_LESS_THAN_EQ',    th.ni),   BRAND.ni],
+        [cond('NUMBER_GREATER_THAN',    th.ni),   BRAND.poor] ];
+  rules.forEach(([condition, band], i) => {
+    reqs.push({ addConditionalFormatRule: { index: i, rule: { ranges: [range], booleanRule: { condition, format: fmt(band) } } } });
+  });
+}
+
+/* --- buttons ------------------------------------------------------------- */
+$('#dlXlsx').addEventListener('click', async () => {
+  if(!state.results.length) return;
+  const btn = $('#dlXlsx'); const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Building…';
+  try{
+    const blob = await buildXlsx(buildReportModel());
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pagespeed-' + runSlug() + '.xlsx';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    $('#reportNote').innerHTML = '<div class="note">Excel workbook downloaded. Drop it into Drive and open with Google Sheets to keep the formatting, or open it in Excel as is.</div>';
+  }catch(e){
+    $('#reportNote').innerHTML = '<div class="err">Could not build the workbook: ' + esc(e.message) + '</div>';
+  }finally{ btn.disabled = false; btn.textContent = was; }
+});
+
+$('#mkSheet').addEventListener('click', async () => {
+  if(!state.results.length) return;
+  const clientId = $('#gclient').value.trim();
+  if(!clientId){
+    $('#reportNote').innerHTML = '<div class="err"><b>No Google OAuth client ID set.</b> Add one under “Sampling and run options” in step 1, or use the Excel export, which needs no setup. ' +
+      'Create a Web application OAuth client in the same Google Cloud project as your PageSpeed key and add <span class="mono">' + esc(location.origin) + '</span> to its authorised JavaScript origins.</div>';
+    const det = document.querySelector('details.adv');
+    if(det){ det.open = true; $('#gclient').scrollIntoView({ behavior:'smooth', block:'center' }); setTimeout(() => $('#gclient').focus(), 400); }
+    return;
+  }
+  const btn = $('#mkSheet'); const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Working…';
+  try{
+    const token = await gsiAuth(clientId);
+    const url = await createGoogleSheet(buildReportModel(), token);
+    $('#reportNote').innerHTML = '<div class="note"><b>Sheet created.</b> <a href="' + esc(url) + '" target="_blank" rel="noopener">Open it in Google Sheets</a>. ' +
+      'It lives in your Drive; this app can only see files it created itself.</div>';
+    window.open(url, '_blank', 'noopener');
+  }catch(e){
+    $('#reportNote').innerHTML = '<div class="err">Google Sheets export failed: ' + esc(e.message) + '</div>';
+  }finally{ btn.disabled = false; btn.textContent = was; }
+});
 
 /* --------------------------------------------------------------- wiring */
 function originOf(raw){
@@ -1981,6 +2748,7 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
 ['#perGroup','#totalCap','#stMobile','#stDesktop'].forEach(s => $(s).addEventListener('change', () => { if(state.sites.length) renderSelection(); }));
 
 /* deep link: ?site=a.com&site=b.com */
+(function showOrigin(){ const n = $('#originHint'); if(n) n.textContent = location.origin; })();
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
   const sites = q.getAll('site').filter(Boolean);
