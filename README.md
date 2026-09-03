@@ -21,8 +21,13 @@ Insights API, and reports the averages.
    similar) are pinned first; the remainder is an even, deterministic spread across the
    collection rather than the first N URLs. The homepage is always included. Allocation
    is round-robin so one huge collection cannot eat the entire budget.
-4. **Measures** each URL through the PageSpeed Insights v5 API, mobile and/or desktop,
-   with a configurable concurrency and automatic retry on 429 and 5xx.
+4. **Measures** each URL through the PageSpeed Insights v5 API, mobile and/or desktop.
+   Every call is fired in the same tick by default, so a 100-URL two-strategy run is 200
+   requests in flight at once rather than a queue. A rolling 230-requests-per-minute
+   guard keeps that under Google's 240/min project quota, and a shared circuit breaker
+   pauses the whole run for seven seconds the moment any call comes back 429, then
+   retries. Batching can be dialled down to 32 / 16 / 8 / 4 at a time if you would
+   rather trickle.
 5. **Reports** site-wide mean and median for Performance, LCP, CLS, TBT, FCP, TTFB and
    Speed Index, plus a per-collection breakdown, a sortable per-page table, real-user
    CrUX field data where Google has it, and CSV / JSON export.
@@ -61,5 +66,9 @@ or serve the folder with anything.
 
 - Gzipped sitemaps (`.xml.gz`) are skipped; browsers cannot decompress them from `fetch`.
 - 20,000 discovered URLs and 30 child sitemaps by default (both configurable).
-- PageSpeed Insights takes roughly 10 to 30 seconds per URL, so a full 100-URL run
-  against both strategies is 200 calls and takes a while. The progress bar shows an ETA.
+- PageSpeed Insights takes roughly 10 to 30 seconds per URL server-side. Because the
+  calls run concurrently, a full 200-call run finishes in about the time of the slowest
+  handful rather than the sum of all of them. The progress bar shows live in-flight count
+  and an ETA.
+- Browsers cap concurrent HTTP/2 streams to one host at around 100, so past that the
+  browser queues the remainder itself. That is fine and needs no configuration.

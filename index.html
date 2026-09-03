@@ -212,8 +212,15 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
           <input type="number" id="totalCap" value="100" min="1" max="100">
         </div>
         <div>
-          <label class="f" for="conc">Parallel requests</label>
-          <input type="number" id="conc" value="4" min="1" max="8">
+          <label class="f" for="conc">Batching</label>
+          <select id="conc">
+            <option value="0" selected>All at once</option>
+            <option value="32">32 at a time</option>
+            <option value="16">16 at a time</option>
+            <option value="8">8 at a time</option>
+            <option value="4">4 at a time</option>
+          </select>
+          <div class="hint">Every call is fired in one tick, held only by a 230/min guard so Google's quota is never tripped.</div>
         </div>
         <div>
           <label class="f" for="maxChild">Max child sitemaps</label>
@@ -277,7 +284,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
   <div class="btnrow" style="margin-top:16px">
     <button class="btn" id="runBtn" type="button">Run PageSpeed test</button>
     <button class="btn ghost" id="stopBtn" type="button" disabled>Stop</button>
-    <span class="prognote" id="runNote"></span>
+    <span class="prognote" id="runNote"></span><span class="prognote" id="inFlight" style="color:var(--muted)"></span>
   </div>
   <div class="progress hidden" id="progWrap"><i id="progBar"></i></div>
   <div id="runErr"></div>
@@ -812,6 +819,31 @@ function extractRun(json){
   };
 }
 
+/* Google allows 240 PSI queries per minute per project. "All at once" fires every
+   job simultaneously; this limiter is what keeps that from tripping the quota, and
+   it backs the whole run off together the moment Google returns a 429. */
+const limiter = {
+  perMinute: 230,
+  starts: [],
+  pausedUntil: 0,
+  inFlight: 0,
+  throttled: 0,
+  reset(perMinute){ this.perMinute = perMinute; this.starts = []; this.pausedUntil = 0; this.inFlight = 0; this.throttled = 0; },
+  async acquire(){
+    while(true){
+      if(state.cancel) throw new Error('cancelled');
+      const now = Date.now();
+      if(now < this.pausedUntil){ await sleep(Math.min(900, this.pausedUntil - now)); continue; }
+      this.starts = this.starts.filter(t => now - t < 60000);
+      if(this.starts.length < this.perMinute){ this.starts.push(now); this.inFlight++; return; }
+      const wait = 60000 - (now - this.starts[0]) + 60;
+      await sleep(Math.min(wait, 1500));
+    }
+  },
+  release(){ this.inFlight = Math.max(0, this.inFlight - 1); },
+  penalise(){ this.throttled++; this.pausedUntil = Date.now() + 7000; }
+};
+
 async function psiRun(url, strategy, key, categories){
   const p = new URLSearchParams();
   p.set('url', url);
@@ -822,30 +854,44 @@ async function psiRun(url, strategy, key, categories){
   let lastErr = 'unknown error';
   for(let attempt = 0; attempt < 3; attempt++){
     if(state.cancel) throw new Error('cancelled');
+    await limiter.acquire();
     try{
       const r = await fetch(endpoint, { method:'GET' });
-      if(r.status === 429 || r.status >= 500){
-        lastErr = 'HTTP ' + r.status + ' (rate limit or Google-side error)';
-        await sleep(2500 * (attempt + 1) + Math.random() * 1200);
+      if(r.status === 429){
+        limiter.penalise();
+        lastErr = 'HTTP 429 rate limited by Google';
+        limiter.release();
+        await sleep(1200 + Math.random() * 1500);
+        continue;
+      }
+      if(r.status >= 500){
+        lastErr = 'HTTP ' + r.status + ' (Google-side error)';
+        limiter.release();
+        await sleep(2200 * (attempt + 1) + Math.random() * 1200);
         continue;
       }
       const json = await r.json().catch(() => null);
+      limiter.release();
       if(!r.ok){
         const msg = json && json.error && json.error.message ? json.error.message : ('HTTP ' + r.status);
-        if(/quota|rate/i.test(msg) && attempt < 2){ lastErr = msg; await sleep(3000 * (attempt+1)); continue; }
+        if(/quota|rate limit|too many/i.test(msg) && attempt < 2){
+          limiter.penalise(); lastErr = msg; await sleep(1500); continue;
+        }
         throw new Error(msg);
       }
       if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
       return extractRun(json);
     }catch(e){
+      limiter.release();
       if(e.message === 'cancelled') throw e;
       lastErr = e.message || String(e);
-      if(attempt < 2) await sleep(1800 * (attempt + 1));
+      if(attempt < 2) await sleep(1500 * (attempt + 1));
     }
   }
   throw new Error(lastErr);
 }
 
+/* limit >= items.length means every job is launched in the same tick. */
 async function runPool(items, limit, worker, onDone){
   let cursor = 0, finished = 0;
   const results = new Array(items.length);
@@ -886,8 +932,15 @@ async function runTest(){
   }
 
   const t0 = Date.now();
-  const conc = clampInt($('#conc').value, 1, 8, 4);
+  const chosen = parseInt($('#conc').value, 10) || 0;
+  const conc = chosen > 0 ? chosen : jobs.length;   // 0 = fire everything in one tick
+  limiter.reset(230);
   let failures = 0;
+  const ticker = setInterval(() => {
+    if(!state.running) return;
+    const f = $('#inFlight');
+    if(f) f.textContent = limiter.inFlight ? limiter.inFlight + ' in flight' : '';
+  }, 400);
 
   await runPool(jobs, conc, async job => {
     const data = await psiRun(job.item.url, job.strategy, key, cats);
@@ -898,8 +951,11 @@ async function runTest(){
     if(res && !res.ok) failures++;
     const elapsed = (Date.now() - t0) / 1000;
     const eta = done ? Math.round(elapsed / done * (total - done)) : 0;
-    $('#runNote').textContent = done + ' of ' + total + ' complete' + (failures ? ' · ' + failures + ' failed' : '') +
-      (done < total ? ' · about ' + (eta > 90 ? Math.round(eta/60) + ' min' : eta + ' s') + ' left' : ' · done in ' + Math.round(elapsed) + ' s');
+    $('#runNote').textContent = done + ' of ' + total + ' complete' +
+      (failures ? ' · ' + failures + ' failed' : '') +
+      (limiter.throttled ? ' · ' + limiter.throttled + ' throttled by Google, backing off' : '') +
+      (done < total ? ' · about ' + (eta > 90 ? Math.round(eta/60) + ' min' : eta + ' s') + ' left'
+                    : ' · done in ' + Math.round(elapsed) + ' s');
     if(res){
       state.results.push({
         url: res.item.item.url, path: res.item.item.path, key: res.item.item.key,
@@ -911,6 +967,8 @@ async function runTest(){
   });
 
   state.running = false;
+  clearInterval(ticker);
+  const f = $('#inFlight'); if(f) f.textContent = '';
   $('#stopBtn').disabled = true; $('#reSample').disabled = false; $('#runBtn').disabled = false;
   renderResults();
 }
