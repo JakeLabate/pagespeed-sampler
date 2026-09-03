@@ -35,16 +35,35 @@ Enter up to four domains. Each is discovered, grouped and sampled on its own, th
 URL across every site runs in one measurement pass. The first domain is treated as yours
 and everything is reported relative to it.
 
-Competitor URL sets never line up page for page, so the comparison works at two levels:
+Competitor URL sets never line up page for page, so the comparison works at three
+levels:
 
 - **Site comparison.** One row per site with mean Performance, LCP, CLS, TBT and TTFB,
   ranked, with deltas against your site. Green means that site is ahead of you.
 - **Key pages, like for like.** Home against home, about against about, contact against
   contact, using the page-role detector. A role only appears when at least two of the
   sites have it; a site missing that role reads "not found".
+- **Paired collections.** Your `/case-studies` against their `/work` against a third
+  site's `/portfolio`, averaged per collection with deltas, and expandable to every
+  measured page in the pairing side by side.
 
-To make this hold up, key pages are now seeded into the sample before the round-robin
-budget runs, so a role that exists on a site is never dropped for lack of budget.
+### Pairing collections
+
+Two sites rarely name the same thing the same way, so pairings are seeded automatically
+from exact names plus a synonym table (blog / news / articles / insights, products /
+shop / store / collections, case-studies / work / portfolio / projects, and so on) with
+naive plural stripping. A pairing is only proposed when at least two sites have a
+matching collection.
+
+The automatic guess is a starting point, not the answer. Step 3 shows a **Comparable
+collections** panel: one row per pairing, one dropdown per site listing that site's
+collections with their page counts. Rename a pairing, repoint any site, set a site to
+"not comparable" to drop it from that row, or add a pairing from scratch to line up two
+collections the synonym table would never have connected.
+
+Editing a pairing re-samples immediately. Key pages are seeded into the sample first,
+then every paired collection, then the round-robin budget fills the rest, so a role or a
+paired collection is never dropped for lack of budget.
 
 Sample sizes will differ between sites, because a 4,000-page site and a 40-page site do
 not sample alike. The pages count is shown on every row; treat a site with a handful of
@@ -52,7 +71,8 @@ measured pages accordingly.
 
 The per-collection and per-page tables gain a site column, and both exports carry a
 `site` field. The JSON export nests everything under `summary.<strategy>.by_site` with
-per-site averages, per-collection averages and the key-page roles.
+per-site averages, per-collection averages and the key-page roles, and records the
+pairings themselves under `paired_collections`.
 
 Quota note: four sites at 100 URLs across both strategies is 800 calls. The daily
 allowance is 25,000.

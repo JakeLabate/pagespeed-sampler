@@ -108,7 +108,7 @@ details.adv .body{padding-top:14px}
 table{width:100%;border-collapse:collapse;font-size:13px}
 th{text-align:left;font-weight:620;font-size:11px;text-transform:uppercase;letter-spacing:.05em;
   color:var(--muted);padding:8px 10px;border-bottom:1px solid var(--axis);white-space:nowrap}
-th.n,td.n{text-align:right;font-variant-numeric:tabular-nums}
+th.n,td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 td{padding:9px 10px;border-bottom:1px solid var(--grid);vertical-align:middle}
 tbody tr:hover{background:var(--surface-2)}
 th.sortable{cursor:pointer;user-select:none}
@@ -174,6 +174,22 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .delta.up{color:var(--good-ink)} .delta.down{color:var(--critical-ink)} .delta.flat{color:var(--muted)}
 .sitename{display:flex;align-items:center;gap:7px;font-weight:640}
 .matrix td.na{color:var(--muted)}
+.mapbox{border:1px solid var(--ring);border-radius:11px;background:var(--surface-2);padding:14px;margin-bottom:16px}
+.mapbox .mh{display:flex;align-items:center;gap:10px;margin-bottom:4px}
+.mapbox .mh .grow{flex:1}
+.mapbox table{margin-top:10px;background:var(--surface);border:1px solid var(--grid);border-radius:9px;overflow:hidden}
+.mapbox td,.mapbox th{padding:6px 9px}
+.mapbox td{border-bottom:1px solid var(--grid)}
+.mapbox tr:last-child td{border-bottom:0}
+.mapbox select,.mapbox input[type=text]{padding:6px 8px;font-size:12.5px;border-radius:7px;background:var(--plane)}
+.mapbox select.unset{color:var(--muted)}
+.mapbox .rm{background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;padding:2px 7px;border-radius:6px}
+.mapbox .rm:hover{background:var(--surface-3);color:var(--critical-ink)}
+.cmpgroup{margin:0 0 14px}
+.cmpgroup > summary{cursor:pointer;list-style:none;font-size:12px;color:var(--ink-2);padding:7px 2px;font-weight:600}
+.cmpgroup > summary::-webkit-details-marker{display:none}
+.cmpgroup > summary:before{content:"▸ ";color:var(--muted)}
+.cmpgroup[open] > summary:before{content:"▾ "}
 .sel-list{max-height:420px;overflow:auto;border:1px solid var(--grid);border-radius:11px}
 .sel-group{border-bottom:1px solid var(--grid)}
 .sel-group:last-child{border-bottom:0}
@@ -294,6 +310,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
     </div>
   </div>
   <div class="pillbar" id="selPills"></div>
+  <div id="mapPanel" class="hidden"></div>
   <div class="sel-list" id="selList"></div>
   <div class="btnrow" style="margin-top:16px">
     <button class="btn" id="runBtn" type="button">Run PageSpeed test</button>
@@ -720,7 +737,7 @@ function sampleBucket(arr, k){
 /* Key pages are seeded first and unconditionally. In a multi-site comparison the
    like-for-like rows (home vs home, about vs about) are the whole point, so a role
    that exists on a site must never be dropped by the round-robin budget. */
-function sampleAll(groups, perGroup, totalCap){
+function sampleAll(groups, perGroup, totalCap, mapped){
   const pools = groups.map(([name, arr]) => ({ name, pool: sampleBucket(arr, perGroup) }));
   const chosen = new Set();
   const seenRole = new Set();
@@ -729,6 +746,17 @@ function sampleAll(groups, perGroup, totalCap){
       if(!it.key || seenRole.has(it.key)) continue;
       if(chosen.size >= totalCap) break;
       seenRole.add(it.key); chosen.add(it);
+    }
+  }
+  /* A collection the user paired with another site must have pages measured on
+     both sides, so its whole sample is seeded before the round-robin budget. */
+  if(mapped && mapped.size){
+    for(const p of pools){
+      if(!mapped.has(p.name)) continue;
+      for(const it of p.pool){
+        if(chosen.size >= totalCap) break;
+        chosen.add(it);
+      }
     }
   }
   let round = 0, added = true;
@@ -745,9 +773,184 @@ function sampleAll(groups, perGroup, totalCap){
   return chosen;
 }
 
+/* ------------------------------------------- comparable collection mapping */
+/* Two sites almost never name the same thing the same way: /case-studies on one
+   is /work on another and /portfolio on a third. These clusters seed the mapping
+   automatically; the user edits it from the panel in step 3, which is the part
+   that actually has to be right. */
+const SYNONYMS = [
+  ['blog','news','articles','article','insights','posts','post','stories','journal','magazine','updates','press'],
+  ['products','product','shop','store','collections','collection','catalog','catalogue','items','buy'],
+  ['case-studies','case-study','work','our-work','portfolio','projects','project','clients','customers','success-stories'],
+  ['services','service','solutions','what-we-do','capabilities','offerings','expertise'],
+  ['resources','guides','guide','library','learn','downloads','tools','templates'],
+  ['docs','documentation','support','help','knowledge-base','kb','faq','faqs'],
+  ['events','event','webinars','webinar','conferences','workshops'],
+  ['careers','career','jobs','join-us','work-with-us'],
+  ['locations','location','stores','branches','areas','service-areas','cities'],
+  ['team','people','staff','our-team','leadership','authors','author'],
+  ['pricing','plans','packages'],
+  ['top-level pages'],
+  ['home']
+];
+const SYN_INDEX = (() => {
+  const m = new Map();
+  SYNONYMS.forEach((cluster, i) => cluster.forEach(term => m.set(term, i)));
+  return m;
+})();
+function clusterOf(name){
+  const n = String(name).toLowerCase();
+  if(SYN_INDEX.has(n)) return 'c' + SYN_INDEX.get(n);
+  const singular = n.replace(/(ies)$/, 'y').replace(/s$/, '');
+  if(SYN_INDEX.has(singular)) return 'c' + SYN_INDEX.get(singular);
+  return 'n:' + n;                       // its own cluster, matched by exact name
+}
+function clusterLabel(key, names){
+  if(key.startsWith('n:')) return key.slice(2);
+  const cluster = SYNONYMS[parseInt(key.slice(1), 10)];
+  const preferred = names.find(n => cluster.includes(String(n).toLowerCase()));
+  return preferred || cluster[0];
+}
+
+let mapGroupSeq = 0;
+function autoMapCollections(){
+  const byCluster = new Map();               // cluster -> Map(origin -> collection name)
+  for(const site of state.sites){
+    for(const [name] of site.groups){
+      const k = clusterOf(name);
+      if(!byCluster.has(k)) byCluster.set(k, new Map());
+      const m = byCluster.get(k);
+      if(!m.has(site.origin)) m.set(site.origin, name);   // first, i.e. largest, wins
+    }
+  }
+  const groups = [];
+  for(const [k, m] of byCluster){
+    if(m.size < 2) continue;                 // nothing to compare
+    if(clusterLabel(k, Array.from(m.values())) === 'home') continue;   // already a role row
+    const map = {};
+    state.sites.forEach(s => { map[s.origin] = m.get(s.origin) || null; });
+    groups.push({ id: 'g' + (++mapGroupSeq), label: clusterLabel(k, Array.from(m.values())), map, auto: true });
+  }
+  // biggest shared collections first
+  groups.sort((a, b) => sizeOfGroup(b) - sizeOfGroup(a));
+  state.compareGroups = groups;
+}
+function sizeOfGroup(g){
+  let n = 0;
+  for(const site of state.sites){
+    const name = g.map[site.origin];
+    if(!name) continue;
+    const found = site.groups.find(([c]) => c === name);
+    if(found) n += found[1].length;
+  }
+  return n;
+}
+function mappedCollections(origin){
+  return new Set(state.compareGroups.map(g => g.map[origin]).filter(Boolean));
+}
+
+function renderMapPanel(){
+  const panel = $('#mapPanel');
+  if(!multi()){ panel.classList.add('hidden'); panel.innerHTML = ''; return; }
+  panel.classList.remove('hidden');
+  panel.innerHTML = '';
+
+  const box = el('div','mapbox');
+  const hd = el('div','mh');
+  hd.innerHTML = '<div class="grow"><b>Comparable collections</b></div>';
+  const add = el('button','btn ghost sm','+ Add a pairing');
+  add.type = 'button';
+  add.addEventListener('click', () => {
+    const map = {}; state.sites.forEach(s => { map[s.origin] = null; });
+    state.compareGroups.push({ id:'g' + (++mapGroupSeq), label:'New pairing', map, auto:false });
+    renderMapPanel(); renderSelection();
+  });
+  hd.appendChild(add);
+  box.appendChild(hd);
+
+  const hint = el('div','hint','Paired collections are compared page for page across sites. These were matched automatically by name and by common synonyms, so check them: your /case-studies may be their /work. Set a site to “not comparable” to leave it out of a row.');
+  hint.setAttribute('style','margin:0');
+  box.appendChild(hint);
+
+  if(!state.compareGroups.length){
+    box.appendChild(el('div','empty','No collections could be paired automatically. Add a pairing to line two up by hand.'));
+    panel.appendChild(box); return;
+  }
+
+  const tw = el('div');
+  tw.style.overflowX = 'auto';
+  const table = document.createElement('table');
+  let head = '<thead><tr><th>Comparison group</th>' +
+    state.sites.map(s => '<th>' + esc(s.label) + (s.primary ? ' <span class="tag key">yours</span>' : '') + '</th>').join('') +
+    '<th></th></tr></thead>';
+  table.innerHTML = head + '<tbody></tbody>';
+  const tb = table.querySelector('tbody');
+
+  state.compareGroups.forEach(g => {
+    const tr = document.createElement('tr');
+    const nameTd = document.createElement('td');
+    const nameInp = document.createElement('input');
+    nameInp.type = 'text'; nameInp.value = g.label; nameInp.style.width = '150px';
+    nameInp.addEventListener('change', () => { g.label = nameInp.value.trim() || 'Untitled'; });
+    nameTd.appendChild(nameInp);
+    tr.appendChild(nameTd);
+
+    for(const site of state.sites){
+      const td = document.createElement('td');
+      const sel = document.createElement('select');
+      sel.style.minWidth = '140px';
+      const none = document.createElement('option');
+      none.value = ''; none.textContent = 'not comparable';
+      sel.appendChild(none);
+      for(const [cname, arr] of site.groups){
+        const o = document.createElement('option');
+        o.value = cname; o.textContent = cname + ' (' + arr.length + ')';
+        sel.appendChild(o);
+      }
+      sel.value = g.map[site.origin] || '';
+      sel.className = sel.value ? '' : 'unset';
+      sel.addEventListener('change', () => {
+        g.map[site.origin] = sel.value || null;
+        sel.className = sel.value ? '' : 'unset';
+        resampleForMapping();
+      });
+      td.appendChild(sel);
+      tr.appendChild(td);
+    }
+
+    const rmTd = document.createElement('td');
+    const rm = el('button','rm','×');
+    rm.type = 'button'; rm.title = 'Remove this pairing';
+    rm.addEventListener('click', () => {
+      state.compareGroups = state.compareGroups.filter(x => x !== g);
+      renderMapPanel(); resampleForMapping();
+    });
+    rmTd.appendChild(rm);
+    tr.appendChild(rmTd);
+    tb.appendChild(tr);
+  });
+
+  tw.appendChild(table);
+  box.appendChild(tw);
+  panel.appendChild(box);
+}
+
+/* Re-sampling on a mapping change keeps the guarantee that a paired collection
+   always has pages measured on both sides. */
+function resampleForMapping(){
+  const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
+  const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
+  state.selected = new Set();
+  for(const site of state.sites){
+    sampleAll(site.groups, perGroup, totalCap, mappedCollections(site.origin)).forEach(x => state.selected.add(x));
+  }
+  renderSelection();
+}
+
 /* ------------------------------------------------------------- app state */
 const state = {
-  sites: [],            // [{ origin, label, primary, items, groups, sitemaps, transport, failed }]
+  sites: [],            // [{ origin, label, primary, items, groups, sitemaps, transport }]
+  compareGroups: [],    // [{ id, label, map: { origin -> collection name | null } }]
   selected: new Set(),
   results: [], index: new Map(), running: false, cancel: false, strategies: []
 };
@@ -821,15 +1024,11 @@ function renderSelection(){
 function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
 
 function buildGroupsAndSample(){
-  const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
-  const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
-  state.selected = new Set();
-  for(const site of state.sites){
-    site.groups = groupUrls(site.items);
-    sampleAll(site.groups, perGroup, totalCap).forEach(x => state.selected.add(x));
-  }
+  for(const site of state.sites) site.groups = groupUrls(site.items);
+  autoMapCollections();
   $('#selCard').classList.remove('hidden');
-  renderSelection();
+  renderMapPanel();
+  resampleForMapping();
 }
 
 /* --------------------------------------------------------- PSI API runner */
@@ -1195,6 +1394,7 @@ function renderResults(){
     if(multi()){
       box.appendChild(siteComparison(okRows, active));
       box.appendChild(roleMatrix(okRows));
+      box.appendChild(collectionComparison(okRows));
     }
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
@@ -1303,6 +1503,92 @@ function roleMatrix(rows){
   html += '</tbody></table>';
   tw.innerHTML = html;
   wrap.appendChild(tw);
+  return wrap;
+}
+
+/* Paired collections, compared page for page across sites. */
+function collectionComparison(rows){
+  const wrap = el('div');
+  const byGroup = [];
+  for(const g of state.compareGroups){
+    const perSite = [];
+    for(const site of state.sites){
+      const cname = g.map[site.origin];
+      if(!cname) continue;
+      const rs = rows.filter(r => r.site === site.origin && r.collection === cname);
+      if(rs.length) perSite.push({ site, cname, rs });
+    }
+    if(perSite.length >= 2) byGroup.push({ g, perSite });
+  }
+  if(!byGroup.length) return wrap;
+
+  const h = el('h3','', 'Paired collections');
+  h.setAttribute('style','margin:24px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Each pairing compares a collection on one site against its counterpart on another. Change the pairings in step 3. Deltas are against ' + esc(primarySite().label) + '.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+
+  for(const { g, perSite } of byGroup){
+    const block = el('div');
+    block.setAttribute('style','margin-bottom:20px');
+    const title = el('div');
+    title.setAttribute('style','font-weight:640;font-size:13px;margin-bottom:7px');
+    title.innerHTML = esc(g.label) + ' <span class="tag">' +
+      perSite.map(x => esc(x.site.label) + ' /' + esc(x.cname)).join('  vs  ') + '</span>';
+    block.appendChild(title);
+
+    const entries = perSite.map(x => ({
+      site: x.site, cname: x.cname, n: x.rs.length, rs: x.rs,
+      vals: Object.fromEntries(CORE.map(c => [c, mean(x.rs.map(r => r.data[c]))]))
+    }));
+    const baseEntry = entries.find(e => e.site.primary);
+    const baseVals = baseEntry ? baseEntry.vals : null;
+    entries.sort((a,b) => (b.vals.perf ?? -1) - (a.vals.perf ?? -1));
+
+    const tw = el('div','tablewrap');
+    let html = '<table><thead><tr><th>Site</th><th>Collection</th><th class="n">Pages</th>' +
+      CORE.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') +
+      '<th style="width:120px">Score scale</th></tr></thead><tbody>';
+    entries.forEach((e, i) => {
+      const gr = grade('perf', e.vals.perf);
+      const w = e.vals.perf == null ? 0 : e.vals.perf;
+      html += '<tr' + (e.site.primary ? ' class="primary"' : '') + '>' +
+        '<td><span class="sitename">' + (i === 0 && entries.length > 1 ? '🥇 ' : '') + esc(e.site.label) +
+          (e.site.primary ? '<span class="tag key">yours</span>' : '') + '</span></td>' +
+        '<td style="white-space:nowrap">/' + esc(e.cname) + '</td><td class="n">' + e.n + '</td>' +
+        CORE.map(c => '<td class="n">' + scoreCell(c, e.vals[c]) +
+          (e.site.primary || !baseVals ? '' : deltaHTML(c, e.vals[c], baseVals[c])) + '</td>').join('') +
+        '<td><div class="bar"><i style="width:' + w + '%;background:' +
+          (gr==='good'?'var(--good)':gr==='ni'?'var(--warning)':'var(--critical)') + '"></i></div></td></tr>';
+    });
+    html += '</tbody></table>';
+    tw.innerHTML = html;
+    block.appendChild(tw);
+
+    const totalPages = entries.reduce((n,e) => n + e.n, 0);
+    const det = el('details','cmpgroup');
+    const sum = document.createElement('summary');
+    sum.textContent = 'Show the ' + totalPages + ' measured pages in this pairing';
+    det.appendChild(sum);
+    const dtw = el('div','tablewrap');
+    let dh = '<table><thead><tr><th>Site</th><th>Page</th>' +
+      CORE.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') + '</tr></thead><tbody>';
+    for(const e of entries){
+      const sorted = e.rs.slice().sort((a,b) => (b.data.perf ?? -1) - (a.data.perf ?? -1));
+      for(const r of sorted){
+        dh += '<tr' + (e.site.primary ? ' class="primary"' : '') + '><td>' + esc(e.site.label) + '</td>' +
+          '<td class="urlcell"><a href="https://pagespeed.web.dev/analysis?url=' + encodeURIComponent(r.url) +
+          '" target="_blank" rel="noopener" title="' + esc(r.url) + '">' + esc(r.path) + '</a></td>' +
+          CORE.map(c => '<td class="n">' + scoreCell(c, r.data[c]) + '</td>').join('') + '</tr>';
+      }
+    }
+    dh += '</tbody></table>';
+    dtw.innerHTML = dh;
+    det.appendChild(dtw);
+    block.appendChild(det);
+    wrap.appendChild(block);
+  }
   return wrap;
 }
 
@@ -1529,6 +1815,10 @@ $('#dlJson').addEventListener('click', () => {
   download('pagespeed-' + runSlug() + '.json', JSON.stringify({
     sites: state.sites.map(s => ({ origin: s.origin, label: s.label, primary: !!s.primary,
                                    urls_discovered: s.items.length, sitemaps: s.sitemaps })),
+    paired_collections: state.compareGroups.map(g => ({
+      label: g.label,
+      collections: Object.fromEntries(state.sites.map(s => [s.label, g.map[s.origin] || null]))
+    })),
     generated_at: new Date().toISOString(),
     summary, results: exportRows()
   }, null, 2), 'application/json');
@@ -1684,7 +1974,7 @@ $('#manualOnlyBtn').addEventListener('click', () => {
   $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
 });
 
-$('#reSample').addEventListener('click', buildGroupsAndSample);
+$('#reSample').addEventListener('click', resampleForMapping);
 $('#selNone').addEventListener('click', () => { state.selected = new Set(); renderSelection(); });
 $('#runBtn').addEventListener('click', () => { runTest().catch(e => { $('#runErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; state.running = false; $('#runBtn').disabled = false; $('#stopBtn').disabled = true; }); });
 $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn').disabled = true; $('#runNote').textContent = 'Stopping after in-flight requests…'; });
