@@ -282,8 +282,8 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
       <div class="row c2" style="margin-top:12px">
         <div>
           <label class="f" for="gclient">Google OAuth client ID (for Google Sheets export)</label>
-          <input type="text" id="gclient" placeholder="1234567890-abc123.apps.googleusercontent.com" spellcheck="false" autocomplete="off">
-          <div class="hint">Optional. Needed only for the one-click Google Sheet. Create a <b>Web application</b> OAuth client in the same Google Cloud project as your PSI key and add <span class="mono" id="originHint"></span> to its authorised JavaScript origins. Excel export needs none of this.</div>
+          <input type="text" id="gclient" value="269152840641-7cdpehnnohdiq5bvojum27ea0f7j9ijm.apps.googleusercontent.com" placeholder="1234567890-abc123.apps.googleusercontent.com" spellcheck="false" autocomplete="off">
+          <div class="hint">Prefilled with this deployment's client. To point the Sheets export at your own Google Cloud project instead, replace it: create a <b>Web application</b> OAuth client, add <span class="mono" id="originHint"></span> to its authorised JavaScript origins, and paste the ID here. A client ID is a public identifier, not a secret. The Excel export needs none of this.</div>
         </div>
         <div>
           <label class="f" for="clientName">Client or project name (report cover)</label>
