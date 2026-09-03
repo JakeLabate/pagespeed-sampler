@@ -2,7 +2,8 @@
 
 A single-file, front-end-only tool that finds a site's sitemap, samples a representative
 set of URLs across its collection types, measures each one with the Google PageSpeed
-Insights API, and reports the averages.
+Insights API, and reports the averages. Add up to four sites and it benchmarks them
+against each other.
 
 **Live: https://jakelabate.github.io/pagespeed-sampler/**
 
@@ -27,6 +28,34 @@ Insights API, and reports the averages.
 5. **Reports** site-wide mean and median for Performance, LCP, CLS, TBT, FCP, TTFB and
    Speed Index, plus a per-collection breakdown, a sortable per-page table, real-user
    CrUX field data where Google has it, and CSV / JSON export.
+
+## Comparing sites
+
+Enter up to four domains. Each is discovered, grouped and sampled on its own, then every
+URL across every site runs in one measurement pass. The first domain is treated as yours
+and everything is reported relative to it.
+
+Competitor URL sets never line up page for page, so the comparison works at two levels:
+
+- **Site comparison.** One row per site with mean Performance, LCP, CLS, TBT and TTFB,
+  ranked, with deltas against your site. Green means that site is ahead of you.
+- **Key pages, like for like.** Home against home, about against about, contact against
+  contact, using the page-role detector. A role only appears when at least two of the
+  sites have it; a site missing that role reads "not found".
+
+To make this hold up, key pages are now seeded into the sample before the round-robin
+budget runs, so a role that exists on a site is never dropped for lack of budget.
+
+Sample sizes will differ between sites, because a 4,000-page site and a 40-page site do
+not sample alike. The pages count is shown on every row; treat a site with a handful of
+measured pages accordingly.
+
+The per-collection and per-page tables gain a site column, and both exports carry a
+`site` field. The JSON export nests everything under `summary.<strategy>.by_site` with
+per-site averages, per-collection averages and the key-page roles.
+
+Quota note: four sites at 100 URLs across both strategies is 800 calls. The daily
+allowance is 25,000.
 
 ## Concurrency
 

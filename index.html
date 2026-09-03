@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PageSpeed Sampler</title>
-<meta name="description" content="Discover a site's sitemap, sample up to 10 URLs per collection type, measure each with the Google PageSpeed Insights API, and report averages.">
+<meta name="description" content="Discover a site's sitemap, sample up to 10 URLs per collection type, measure each with the Google PageSpeed Insights API, report averages, and benchmark up to four sites against each other.">
 <style>
 :root{
   color-scheme: light;
@@ -161,6 +161,19 @@ th.sortable[data-dir="asc"]:after{content:" ↑";color:var(--accent)}
 .note{background:var(--surface-2);border:1px solid var(--grid);border-radius:9px;padding:10px 12px;font-size:12.5px;color:var(--ink-2);margin-top:12px}
 .hidden{display:none !important}
 .grouphd{font-weight:640;font-size:13px}
+.siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.siterow input{flex:1}
+.siterow .num{width:20px;flex:none;font-size:11px;font-weight:700;color:var(--muted);text-align:center}
+.siterow .rm{flex:none;background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:6px 8px;border-radius:7px}
+.siterow .rm:hover{background:var(--surface-2);color:var(--critical-ink)}
+.site-hd{padding:11px 12px;background:var(--surface-3);font-size:13px;display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid var(--grid);position:sticky;top:0;z-index:2}
+tr.primary td{background:color-mix(in srgb,var(--accent) 7%,transparent)}
+tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.delta{font-size:11px;font-weight:640;font-variant-numeric:tabular-nums;margin-left:6px}
+.delta.up{color:var(--good-ink)} .delta.down{color:var(--critical-ink)} .delta.flat{color:var(--muted)}
+.sitename{display:flex;align-items:center;gap:7px;font-weight:640}
+.matrix td.na{color:var(--muted)}
 .sel-list{max-height:420px;overflow:auto;border:1px solid var(--grid);border-radius:11px}
 .sel-group{border-bottom:1px solid var(--grid)}
 .sel-group:last-child{border-bottom:0}
@@ -178,7 +191,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
 <header class="top">
   <div class="grow">
     <h1>PageSpeed Sampler</h1>
-    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Runs entirely in your browser.</p>
+    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Add up to four sites to benchmark a client against its competitors, page role by page role. Runs entirely in your browser.</p>
   </div>
   <button class="iconbtn" id="themeBtn" type="button" aria-label="Toggle theme">Theme</button>
 </header>
@@ -188,9 +201,10 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
   <div class="hd"><span class="step">1</span><h2 class="grow">Setup</h2></div>
   <div class="row c2">
     <div>
-      <label class="f" for="site">Site URL</label>
-      <input type="url" id="site" placeholder="https://example.com" spellcheck="false" autocomplete="url">
-      <div class="hint">Domain or any page on the site. The sitemap is looked up from its origin.</div>
+      <label class="f">Sites</label>
+      <div id="siteList"></div>
+      <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
+      <div class="hint">Domain or any page on the site; the sitemap is looked up from its origin. Add up to four. The first is treated as yours and everything else is measured against it.</div>
     </div>
     <div>
       <label class="f" for="key">PageSpeed Insights API key</label>
@@ -256,7 +270,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
   </details>
 
   <div class="btnrow" style="margin-top:16px">
-    <button class="btn" id="discoverBtn" type="button">Find sitemap and sample URLs</button>
+    <button class="btn" id="discoverBtn" type="button">Find sitemaps and sample URLs</button>
     <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
   </div>
   <div id="setupErr"></div>
@@ -332,7 +346,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#site','#key','#perGroup','#totalCap','#conc','#maxChild'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -641,10 +655,14 @@ function normalise(list, origin){
     if(href.length > 1 && href.endsWith('/') && u.pathname !== '/') href = href.slice(0, -1);
     if(seen.has(href)) continue;
     seen.add(href);
-    out.push({ url: href, path: u.pathname, lastmod: item.lastmod || null, source: item.source || null, key: keyPageType(href) });
+    out.push({
+      url: href, path: u.pathname, lastmod: item.lastmod || null, source: item.source || null,
+      key: keyPageType(href), site: origin, siteLabel: hostLabel(origin), collection: null
+    });
   }
   return out.sort((a,b) => a.path.localeCompare(b.path));
 }
+function hostLabel(origin){ try{ return new URL(origin).host.replace(/^www\./,''); }catch(e){ return origin; } }
 
 /* Collection = first path segment. Single-segment pages collapse into "top-level pages". */
 function groupUrls(items){
@@ -655,7 +673,6 @@ function groupUrls(items){
     if(segs.length === 0){ put('home', it); continue; }
     put(decodeURIComponent(segs[0]).toLowerCase(), it);
   }
-  // collapse singleton buckets whose only member is a one-segment URL
   const top = [];
   for(const [name, arr] of Array.from(buckets)){
     if(name === 'home') continue;
@@ -667,13 +684,13 @@ function groupUrls(items){
     const existing = buckets.get('top-level pages') || [];
     buckets.set('top-level pages', existing.concat(top).sort((a,b)=>a.path.localeCompare(b.path)));
   }
-  // order: home, top-level pages, then by size desc
   const ordered = [];
   if(buckets.has('home')) ordered.push(['home', buckets.get('home')]);
   if(buckets.has('top-level pages')) ordered.push(['top-level pages', buckets.get('top-level pages')]);
   Array.from(buckets).filter(([n]) => n !== 'home' && n !== 'top-level pages')
     .sort((a,b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .forEach(g => ordered.push(g));
+  ordered.forEach(([name, arr]) => arr.forEach(it => { it.collection = name; }));
   return ordered;
 }
 
@@ -700,13 +717,20 @@ function sampleBucket(arr, k){
   return picked.sort((a,b) => a.path.localeCompare(b.path));
 }
 
+/* Key pages are seeded first and unconditionally. In a multi-site comparison the
+   like-for-like rows (home vs home, about vs about) are the whole point, so a role
+   that exists on a site must never be dropped by the round-robin budget. */
 function sampleAll(groups, perGroup, totalCap){
   const pools = groups.map(([name, arr]) => ({ name, pool: sampleBucket(arr, perGroup) }));
-  // guarantee the homepage
   const chosen = new Set();
-  const home = pools.find(p => p.name === 'home');
-  if(home && home.pool.length) chosen.add(home.pool[0]);
-  // round-robin so one huge collection cannot eat the whole budget
+  const seenRole = new Set();
+  for(const p of pools){
+    for(const it of p.pool){
+      if(!it.key || seenRole.has(it.key)) continue;
+      if(chosen.size >= totalCap) break;
+      seenRole.add(it.key); chosen.add(it);
+    }
+  }
   let round = 0, added = true;
   while(chosen.size < totalCap && added){
     added = false;
@@ -723,9 +747,14 @@ function sampleAll(groups, perGroup, totalCap){
 
 /* ------------------------------------------------------------- app state */
 const state = {
-  origin: null, all: [], groups: [], selected: new Set(),
+  sites: [],            // [{ origin, label, primary, items, groups, sitemaps, transport, failed }]
+  selected: new Set(),
   results: [], index: new Map(), running: false, cancel: false, strategies: []
 };
+const multi = () => state.sites.length > 1;
+const primarySite = () => (state.sites.find(s => s.primary) || state.sites[0] || null);
+
+function collectionOf(item){ return item.collection || 'other'; }
 
 function renderSelection(){
   const list = $('#selList'); list.innerHTML = '';
@@ -733,56 +762,72 @@ function renderSelection(){
   const totalSel = state.selected.size;
   const cap = clampInt($('#totalCap').value, 1, 100, 100);
   const addPill = (label, val) => { const p = el('span','pill'); p.innerHTML = esc(label) + ' <b>' + esc(String(val)) + '</b>'; pills.appendChild(p); };
-  addPill('Collections', state.groups.length);
-  addPill('URLs discovered', state.all.length);
-  addPill('Selected', totalSel + ' / ' + cap);
   const nStrat = (($('#stMobile').checked?1:0) + ($('#stDesktop').checked?1:0)) || 1;
+  const allItems = state.sites.reduce((n,s) => n + s.items.length, 0);
+  if(multi()) addPill('Sites', state.sites.length);
+  addPill('Collections', state.sites.reduce((n,s) => n + s.groups.length, 0));
+  addPill('URLs discovered', allItems);
+  addPill('Selected', totalSel + (multi() ? '' : ' / ' + cap));
   addPill('API calls', totalSel * nStrat);
 
-  for(const [name, arr] of state.groups){
-    const picked = arr.filter(x => state.selected.has(x));
-    const g = el('div','sel-group');
-    const gh = el('div','gh');
-    const cb = document.createElement('input'); cb.type='checkbox';
-    cb.checked = picked.length > 0; cb.indeterminate = picked.length > 0 && picked.length < arr.length;
-    cb.addEventListener('change', () => {
-      if(cb.checked){ sampleBucket(arr, clampInt($('#perGroup').value,1,10,10)).forEach(x => state.selected.add(x)); }
-      else { arr.forEach(x => state.selected.delete(x)); }
-      renderSelection();
-    });
-    gh.appendChild(cb);
-    const t = el('div','grow');
-    t.innerHTML = '<span class="grouphd">' + esc(name) + '</span> <span class="tag">' + picked.length + ' of ' + arr.length + '</span>';
-    gh.appendChild(t);
-    g.appendChild(gh);
-
-    const show = arr.slice(0, 400);
-    for(const it of show){
-      const row = el('div','sel-item' + (state.selected.has(it) ? ' picked' : ''));
-      const c = document.createElement('input'); c.type='checkbox'; c.checked = state.selected.has(it);
-      c.addEventListener('change', () => { c.checked ? state.selected.add(it) : state.selected.delete(it); renderSelection(); });
-      row.appendChild(c);
-      const u = el('div','u', it.path === '/' ? '/ (home)' : it.path);
-      u.title = it.url;
-      row.appendChild(u);
-      if(it.key){ const k = el('span','tag key', it.key); row.appendChild(k); }
-      g.appendChild(row);
+  for(const site of state.sites){
+    if(multi()){
+      const hd = el('div','site-hd');
+      const picked = site.items.filter(x => state.selected.has(x)).length;
+      hd.innerHTML = '<b>' + esc(site.label) + '</b>' +
+        (site.primary ? '<span class="tag key">yours</span>' : '') +
+        '<span class="tag">' + picked + ' of ' + site.items.length + ' selected</span>';
+      list.appendChild(hd);
     }
-    if(arr.length > show.length) g.appendChild(el('div','sel-item', '… ' + (arr.length - show.length) + ' more not listed'));
-    list.appendChild(g);
+    for(const [name, arr] of site.groups){
+      const picked = arr.filter(x => state.selected.has(x));
+      const g = el('div','sel-group');
+      const gh = el('div','gh');
+      const cb = document.createElement('input'); cb.type='checkbox';
+      cb.checked = picked.length > 0; cb.indeterminate = picked.length > 0 && picked.length < arr.length;
+      cb.addEventListener('change', () => {
+        if(cb.checked){ sampleBucket(arr, clampInt($('#perGroup').value,1,10,10)).forEach(x => state.selected.add(x)); }
+        else { arr.forEach(x => state.selected.delete(x)); }
+        renderSelection();
+      });
+      gh.appendChild(cb);
+      const t = el('div','grow');
+      t.innerHTML = '<span class="grouphd">' + esc(name) + '</span> <span class="tag">' + picked.length + ' of ' + arr.length + '</span>';
+      gh.appendChild(t);
+      g.appendChild(gh);
+      const show = arr.slice(0, 300);
+      for(const it of show){
+        const row = el('div','sel-item' + (state.selected.has(it) ? ' picked' : ''));
+        const c = document.createElement('input'); c.type='checkbox'; c.checked = state.selected.has(it);
+        c.addEventListener('change', () => { c.checked ? state.selected.add(it) : state.selected.delete(it); renderSelection(); });
+        row.appendChild(c);
+        const u = el('div','u', it.path === '/' ? '/ (home)' : it.path);
+        u.title = it.url;
+        row.appendChild(u);
+        if(it.key){ const k = el('span','tag key', it.key); row.appendChild(k); }
+        g.appendChild(row);
+      }
+      if(arr.length > show.length) g.appendChild(el('div','sel-item', '… ' + (arr.length - show.length) + ' more not listed'));
+      list.appendChild(g);
+    }
   }
   $('#runBtn').disabled = totalSel === 0 || state.running;
-  $('#runNote').textContent = totalSel ? (totalSel + ' URL' + (totalSel>1?'s':'') + ' x ' + nStrat + ' strateg' + (nStrat>1?'ies':'y') + ' = ' + (totalSel*nStrat) + ' PageSpeed calls') : '';
+  $('#runNote').textContent = totalSel
+    ? (totalSel + ' URL' + (totalSel>1?'s':'') + (multi() ? ' across ' + state.sites.length + ' sites' : '') +
+       ' x ' + nStrat + ' strateg' + (nStrat>1?'ies':'y') + ' = ' + (totalSel*nStrat) + ' PageSpeed calls')
+    : '';
 }
 
 function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
 
-function buildGroupsAndSample(items){
-  state.all = items;
-  state.groups = groupUrls(items);
+function buildGroupsAndSample(){
   const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
   const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
-  state.selected = sampleAll(state.groups, perGroup, totalCap);
+  state.selected = new Set();
+  for(const site of state.sites){
+    site.groups = groupUrls(site.items);
+    sampleAll(site.groups, perGroup, totalCap).forEach(x => state.selected.add(x));
+  }
   $('#selCard').classList.remove('hidden');
   renderSelection();
 }
@@ -1015,6 +1060,7 @@ async function runTest(){
     const row = {
       item: job.item,
       url: job.item.url, path: job.item.path, key: job.item.key,
+      site: job.item.site, siteLabel: job.item.siteLabel,
       collection: collectionOf(job.item), strategy: job.strategy,
       ok, error: ok ? null : valueOrError, data: ok ? valueOrError : null
     };
@@ -1118,13 +1164,10 @@ async function retryFailures(strategyFilter){
   renderResults();
 }
 
-function collectionOf(item){
-  for(const [name, arr] of state.groups) if(arr.includes(item)) return name;
-  return 'other';
-}
-
 /* ---------------------------------------------------------- results view */
 let sortKey = 'perf', sortDir = 'desc';
+
+const CORE = ['perf','lcp','cls','tbt','ttfb'];
 
 function renderResults(){
   const card = $('#resCard');
@@ -1133,7 +1176,7 @@ function renderResults(){
 
   const sel = $('#resStrategy');
   const strats = uniq(state.results.map(r => r.strategy));
-  if(sel.options.length !== strats.length + (strats.length > 1 ? 1 : 0)){
+  if(sel.options.length !== strats.length){
     sel.innerHTML = '';
     strats.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s[0].toUpperCase() + s.slice(1); sel.appendChild(o); });
     sel.value = strats[0];
@@ -1149,45 +1192,128 @@ function renderResults(){
   if(!okRows.length){
     box.appendChild(el('div','empty','No successful measurements yet for ' + active + '.'));
   } else {
-    box.appendChild(tilesFor(okRows, active));
+    if(multi()){
+      box.appendChild(siteComparison(okRows, active));
+      box.appendChild(roleMatrix(okRows));
+    }
+    box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
     box.appendChild(collectionTable(okRows));
     box.appendChild(urlTable(okRows));
   }
-  if(failRows.length){
-    const byErr = new Map();
-    failRows.forEach(r => {
-      const k = (r.error || 'unknown').slice(0, 160);
-      if(!byErr.has(k)) byErr.set(k, []);
-      byErr.get(k).push(r);
+  if(failRows.length) box.appendChild(failurePanel(failRows, rows, active));
+}
+
+/* ---- cross-site comparison --------------------------------------------- */
+function deltaHTML(metric, v, base){
+  if(v == null || base == null || !isFinite(v) || !isFinite(base)) return '';
+  const diff = v - base;
+  const m = METRICS[metric];
+  const rel = Math.abs(diff) / (Math.abs(base) || 1);
+  if(rel < 0.02) return '<span class="delta flat">even</span>';
+  const better = m.higher ? diff > 0 : diff < 0;
+  const sign = diff > 0 ? '+' : '';
+  const shown = m.unit === 'score' ? sign + Math.round(diff)
+              : m.unit === 'num'   ? sign + diff.toFixed(3)
+              : sign + (Math.abs(diff) >= 1000 ? (diff/1000).toFixed(2) + 's' : Math.round(diff) + 'ms');
+  return '<span class="delta ' + (better ? 'up' : 'down') + '">' + shown + '</span>';
+}
+
+function siteComparison(rows, strategy){
+  const wrap = el('div');
+  const base = primarySite();
+  const h = el('div'); h.style.margin = '0 0 10px';
+  h.innerHTML = '<h3>Site comparison, ' + esc(strategy) + '</h3>' +
+    '<p class="hint" style="margin-top:4px">Mean across each site\'s own sample. Deltas are against <b>' +
+    esc(base.label) + '</b>; green means that site is ahead of yours on that metric. Sample sizes differ, so read a site with few measured pages carefully.</p>';
+  wrap.appendChild(h);
+
+  const bySite = new Map();
+  rows.forEach(r => { if(!bySite.has(r.site)) bySite.set(r.site, []); bySite.get(r.site).push(r); });
+  const entries = state.sites
+    .filter(s => bySite.has(s.origin))
+    .map(s => {
+      const rs = bySite.get(s.origin);
+      return { site: s, n: rs.length, vals: Object.fromEntries(CORE.map(c => [c, mean(rs.map(r => r.data[c]))])) };
     });
-    const d = el('div','err');
-    let html = '<b>' + failRows.length + ' of ' + rows.length + ' ' + esc(active) +
-      ' request' + (failRows.length > 1 ? 's' : '') + ' failed</b>';
-    for(const [msg, rs] of Array.from(byErr).sort((a,b) => b[1].length - a[1].length)){
-      html += '<div style="margin-top:8px"><b>' + rs.length + '&times;</b> ' + esc(msg) +
-        '<div style="opacity:.8;margin-top:2px">' +
-        rs.slice(0, 6).map(r => esc(r.path)).join(', ') +
-        (rs.length > 6 ? ' and ' + (rs.length - 6) + ' more' : '') + '</div></div>';
-    }
-    if(/ERRORED_DOCUMENT_REQUEST|500|internal|timed out|timeout/i.test(Array.from(byErr.keys()).join(' '))){
-      html += '<div style="margin-top:10px;opacity:.85">A 500 from PageSpeed usually means Google\'s Lighthouse pool was saturated, not that the page is broken. ' +
-        'Retrying below runs the failures 4 at a time, which almost always clears them.</div>';
-    }
-    d.innerHTML = html;
-    const b = el('button','btn ghost sm','Retry the ' + failRows.length + ' failed call' + (failRows.length>1?'s':''));
-    b.style.marginTop = '12px';
-    b.disabled = state.running;
-    b.addEventListener('click', () => retryFailures(active));
-    d.appendChild(b);
-    box.appendChild(d);
+  const baseVals = (entries.find(e => e.site.primary) || entries[0]).vals;
+  entries.sort((a,b) => (b.vals.perf ?? -1) - (a.vals.perf ?? -1));
+
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Site</th><th class="n">Pages</th>' +
+    CORE.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') +
+    '<th style="width:130px">Score scale</th></tr></thead><tbody>';
+  entries.forEach((e, i) => {
+    const g = grade('perf', e.vals.perf);
+    const w = e.vals.perf == null ? 0 : e.vals.perf;
+    html += '<tr' + (e.site.primary ? ' class="primary"' : '') + '>' +
+      '<td><span class="sitename">' + (i === 0 ? '🥇 ' : '') + esc(e.site.label) +
+        (e.site.primary ? '<span class="tag key">yours</span>' : '') + '</span></td>' +
+      '<td class="n">' + e.n + '</td>' +
+      CORE.map(c => '<td class="n">' + scoreCell(c, e.vals[c]) +
+        (e.site.primary ? '' : deltaHTML(c, e.vals[c], baseVals[c])) + '</td>').join('') +
+      '<td><div class="bar"><i style="width:' + w + '%;background:' +
+        (g==='good'?'var(--good)':g==='ni'?'var(--warning)':'var(--critical)') + '"></i></div></td></tr>';
+  });
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  wrap.appendChild(tw);
+  return wrap;
+}
+
+/* Competitor URL sets never line up page for page, so the like-for-like view is
+   by page role: home against home, contact against contact. */
+function roleMatrix(rows){
+  const wrap = el('div');
+  const sites = state.sites.filter(s => rows.some(r => r.site === s.origin));
+  const byRole = new Map();
+  rows.forEach(r => {
+    if(!r.key) return;
+    if(!byRole.has(r.key)) byRole.set(r.key, new Map());
+    const m = byRole.get(r.key);
+    if(!m.has(r.site)) m.set(r.site, r);         // first match for that role wins
+  });
+  const roles = Array.from(byRole).filter(([, m]) => m.size >= 2);
+  if(!roles.length){
+    const n = el('div','note');
+    n.innerHTML = '<b>No shared page roles.</b> None of the recognised key pages (home, about, contact and the rest) were measured on two or more of these sites, so there is nothing to line up. The site averages above still compare.';
+    wrap.appendChild(n);
+    return wrap;
   }
+  const h = el('h3','', 'Key pages, like for like');
+  h.setAttribute('style','margin:24px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Performance score, then LCP. Only roles found on at least two of these sites are shown.');
+  p.setAttribute('style','margin:0 0 10px');
+  wrap.appendChild(p);
+
+  const tw = el('div','tablewrap');
+  let html = '<table class="matrix"><thead><tr><th>Page role</th>' +
+    sites.map(s => '<th class="n">' + esc(s.label) + (s.primary ? ' <span class="tag key">yours</span>' : '') + '</th>').join('') +
+    '</tr></thead><tbody>';
+  for(const [role, m] of roles){
+    html += '<tr><td><b>' + esc(role) + '</b></td>' + sites.map(s => {
+      const r = m.get(s.origin);
+      if(!r) return '<td class="n na">not found</td>';
+      return '<td class="n">' + scoreCell('perf', r.data.perf) +
+        '<div style="font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px">' +
+        esc(fmt('lcp', r.data.lcp)) + ' LCP</div></td>';
+    }).join('') + '</tr>';
+  }
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  wrap.appendChild(tw);
+  return wrap;
 }
 
 function tilesFor(rows, strategy){
   const wrap = el('div');
-  const h = el('div'); h.style.margin = '0 0 12px';
-  h.innerHTML = '<h3>Site average, ' + esc(strategy) + '</h3><p class="hint" style="margin-top:4px">Mean across ' + rows.length + ' measured page' + (rows.length>1?'s':'') + ' in ' + uniq(rows.map(r=>r.collection)).length + ' collection' + (uniq(rows.map(r=>r.collection)).length>1?'s':'') + '. Median shown beneath each figure.</p>';
+  const label = multi() ? primarySite().label : null;
+  const nCol = uniq(rows.map(r => r.collection)).length;
+  const h = el('div'); h.setAttribute('style','margin:24px 0 12px');
+  h.innerHTML = '<h3>' + (label ? esc(label) + ' in detail' : 'Site average, ' + esc(strategy)) + '</h3>' +
+    '<p class="hint" style="margin-top:4px">Mean across ' + rows.length + ' measured page' + (rows.length>1?'s':'') +
+    ' in ' + nCol + ' collection' + (nCol>1?'s':'') + '. Median shown beneath each figure.</p>';
   wrap.appendChild(h);
 
   const keys = ['perf','lcp','cls','tbt','fcp','ttfb','si'];
@@ -1214,11 +1340,10 @@ function tilesFor(rows, strategy){
   const fieldRows = rows.filter(r => r.data && (r.data.fieldLcp != null || r.data.fieldInp != null));
   if(fieldRows.length){
     const f = el('div','note');
-    const fl = mean(fieldRows.map(r => r.data.fieldLcp));
-    const fc = mean(fieldRows.map(r => r.data.fieldCls));
-    const fi = mean(fieldRows.map(r => r.data.fieldInp));
     f.innerHTML = '<b>Real-user field data (CrUX)</b> available for ' + fieldRows.length + ' of ' + rows.length +
-      ' pages. Average LCP ' + fmt('lcp', fl) + ', CLS ' + fmt('cls', fc) + ', INP ' + fmt('inp', fi) +
+      ' pages. Average LCP ' + fmt('lcp', mean(fieldRows.map(r => r.data.fieldLcp))) +
+      ', CLS ' + fmt('cls', mean(fieldRows.map(r => r.data.fieldCls))) +
+      ', INP ' + fmt('inp', mean(fieldRows.map(r => r.data.fieldInp))) +
       '. Field data reflects the last 28 days of Chrome users; the tiles above are lab data.';
     wrap.appendChild(f);
   }
@@ -1237,23 +1362,29 @@ function legend(){
 
 function collectionTable(rows){
   const wrap = el('div');
-  wrap.appendChild(Object.assign(el('h3','', 'Average by collection'), { style:'margin:22px 0 10px' }));
-  const cols = ['perf','lcp','cls','tbt','ttfb'];
+  const h = el('h3','', multi() ? 'Average by site and collection' : 'Average by collection');
+  h.setAttribute('style','margin:24px 0 10px');
+  wrap.appendChild(h);
   const byCol = new Map();
-  rows.forEach(r => { if(!byCol.has(r.collection)) byCol.set(r.collection, []); byCol.get(r.collection).push(r); });
+  rows.forEach(r => {
+    const k = (multi() ? r.siteLabel + ' › ' : '') + r.collection;
+    if(!byCol.has(k)) byCol.set(k, []);
+    byCol.get(k).push(r);
+  });
   const entries = Array.from(byCol).map(([name, rs]) => ({
-    name, n: rs.length, vals: Object.fromEntries(cols.map(c => [c, mean(rs.map(r => r.data[c]))]))
+    name, n: rs.length, primary: multi() && rs[0].site === primarySite().origin,
+    vals: Object.fromEntries(CORE.map(c => [c, mean(rs.map(r => r.data[c]))]))
   })).sort((a,b) => (a.vals.perf ?? 999) - (b.vals.perf ?? 999));
 
   const tw = el('div','tablewrap');
-  let html = '<table><thead><tr><th>Collection</th><th class="n">Pages</th>' +
-    cols.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') +
+  let html = '<table><thead><tr><th>' + (multi() ? 'Site and collection' : 'Collection') + '</th><th class="n">Pages</th>' +
+    CORE.map(c => '<th class="n">' + esc(METRICS[c].label) + '</th>').join('') +
     '<th style="width:130px">Score scale</th></tr></thead><tbody>';
   for(const e of entries){
     const g = grade('perf', e.vals.perf);
     const w = e.vals.perf == null ? 0 : e.vals.perf;
-    html += '<tr><td><b>' + esc(e.name) + '</b></td><td class="n">' + e.n + '</td>' +
-      cols.map(c => '<td class="n">' + scoreCell(c, e.vals[c]) + '</td>').join('') +
+    html += '<tr' + (e.primary ? ' class="primary"' : '') + '><td><b>' + esc(e.name) + '</b></td><td class="n">' + e.n + '</td>' +
+      CORE.map(c => '<td class="n">' + scoreCell(c, e.vals[c]) + '</td>').join('') +
       '<td><div class="bar"><i style="width:' + w + '%;background:' + (g==='good'?'var(--good)':g==='ni'?'var(--warning)':'var(--critical)') + '"></i></div></td></tr>';
   }
   html += '</tbody></table>';
@@ -1264,7 +1395,9 @@ function collectionTable(rows){
 
 function urlTable(rows){
   const wrap = el('div');
-  wrap.appendChild(Object.assign(el('h3','', 'Every measured page'), { style:'margin:22px 0 10px' }));
+  const h = el('h3','', 'Every measured page');
+  h.setAttribute('style','margin:24px 0 10px');
+  wrap.appendChild(h);
   const cols = [['perf','Perf'],['lcp','LCP'],['cls','CLS'],['tbt','TBT'],['fcp','FCP'],['ttfb','TTFB'],['si','SI']];
   const extra = [['a11y','A11y'],['bp','BP'],['seo','SEO']].filter(([k]) => rows.some(r => r.data[k] != null));
   const all = cols.concat(extra);
@@ -1276,11 +1409,13 @@ function urlTable(rows){
   });
 
   const tw = el('div','tablewrap');
-  let html = '<table><thead><tr><th>Page</th><th>Collection</th>' +
+  let html = '<table><thead><tr>' + (multi() ? '<th>Site</th>' : '') + '<th>Page</th><th>Collection</th>' +
     all.map(([k,l]) => '<th class="n sortable" data-k="' + k + '"' + (k===sortKey?' data-dir="'+sortDir+'"':'') + '>' + esc(l) + '</th>').join('') +
     '</tr></thead><tbody>';
   for(const r of sorted){
-    html += '<tr><td class="urlcell"><a href="https://pagespeed.web.dev/analysis?url=' + encodeURIComponent(r.url) +
+    html += '<tr' + (multi() && r.site === primarySite().origin ? ' class="primary"' : '') + '>' +
+      (multi() ? '<td>' + esc(r.siteLabel) + '</td>' : '') +
+      '<td class="urlcell"><a href="https://pagespeed.web.dev/analysis?url=' + encodeURIComponent(r.url) +
       '" target="_blank" rel="noopener" title="' + esc(r.url) + '">' + esc(r.path === '/' ? '/ (home)' : r.path) + '</a>' +
       (r.key ? '<span class="tag key">' + esc(r.key) + '</span>' : '') + '</td>' +
       '<td>' + esc(r.collection) + '</td>' +
@@ -1298,10 +1433,42 @@ function urlTable(rows){
   return wrap;
 }
 
+function failurePanel(failRows, rows, active){
+  const byErr = new Map();
+  failRows.forEach(r => {
+    const k = (r.error || 'unknown').slice(0, 160);
+    if(!byErr.has(k)) byErr.set(k, []);
+    byErr.get(k).push(r);
+  });
+  const d = el('div','err');
+  let html = '<b>' + failRows.length + ' of ' + rows.length + ' ' + esc(active) +
+    ' request' + (failRows.length > 1 ? 's' : '') + ' failed</b>';
+  for(const [msg, rs] of Array.from(byErr).sort((a,b) => b[1].length - a[1].length)){
+    html += '<div style="margin-top:8px"><b>' + rs.length + '&times;</b> ' + esc(msg) +
+      '<div style="opacity:.8;margin-top:2px">' +
+      rs.slice(0, 6).map(r => esc((multi() ? r.siteLabel : '') + r.path)).join(', ') +
+      (rs.length > 6 ? ' and ' + (rs.length - 6) + ' more' : '') + '</div></div>';
+  }
+  if(/ERRORED_DOCUMENT_REQUEST|500|internal|timed out|timeout/i.test(Array.from(byErr.keys()).join(' '))){
+    html += '<div style="margin-top:10px;opacity:.85">A 500 from PageSpeed usually means Google\'s Lighthouse pool was saturated, not that the page is broken. ' +
+      'Retrying below runs the failures 4 at a time, which almost always clears them.</div>';
+  }
+  d.innerHTML = html;
+  const b = el('button','btn ghost sm','Retry the ' + failRows.length + ' failed call' + (failRows.length>1?'s':''));
+  b.style.marginTop = '12px';
+  b.disabled = state.running;
+  b.addEventListener('click', () => retryFailures(active));
+  d.appendChild(b);
+  return d;
+}
+
 /* ------------------------------------------------------------- exporting */
+const AVG_KEYS = ['perf','lcp','cls','tbt','fcp','si','ttfb'];
+function avgOf(rs, fn){ return Object.fromEntries(AVG_KEYS.map(k => [k, fn(rs.map(r => r.data[k]))])); }
+
 function exportRows(){
   return state.results.map(r => ({
-    url: r.url, path: r.path, collection: r.collection, key_page: r.key || '',
+    site: r.siteLabel || '', url: r.url, path: r.path, collection: r.collection, key_page: r.key || '',
     strategy: r.strategy, status: r.ok ? 'ok' : 'error', error: r.error || '',
     performance: r.data ? r.data.perf : '', accessibility: r.data ? r.data.a11y : '',
     best_practices: r.data ? r.data.bp : '', seo: r.data ? r.data.seo : '',
@@ -1321,34 +1488,48 @@ function download(name, text, type){
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
-function slugOrigin(){ try{ return new URL(state.origin).host.replace(/[^a-z0-9]+/gi,'-'); }catch(e){ return 'site'; } }
+function runSlug(){
+  if(!state.sites.length) return 'site';
+  const base = state.sites[0].label.replace(/[^a-z0-9]+/gi,'-');
+  return multi() ? base + '-vs-' + (state.sites.length - 1) : base;
+}
 $('#dlCsv').addEventListener('click', () => {
   const rows = exportRows(); if(!rows.length) return;
   const head = Object.keys(rows[0]);
   const q = v => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g,'""') + '"' : s; };
   const csv = [head.join(',')].concat(rows.map(r => head.map(h => q(r[h])).join(','))).join('\n');
-  download('pagespeed-' + slugOrigin() + '.csv', csv, 'text/csv');
+  download('pagespeed-' + runSlug() + '.csv', csv, 'text/csv');
 });
 $('#dlJson').addEventListener('click', () => {
   const strats = uniq(state.results.map(r => r.strategy));
   const summary = {};
   for(const s of strats){
     const rs = state.results.filter(r => r.strategy === s && r.ok);
-    const byCol = {};
-    rs.forEach(r => { (byCol[r.collection] = byCol[r.collection] || []).push(r); });
-    summary[s] = {
-      pages_measured: rs.length,
-      site_average: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, mean(rs.map(r => r.data[k]))])),
-      site_median: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, median(rs.map(r => r.data[k]))])),
-      by_collection: Object.fromEntries(Object.entries(byCol).map(([c, rr]) => [c, {
-        pages: rr.length,
-        average: Object.fromEntries(['perf','lcp','cls','tbt','fcp','si','ttfb'].map(k => [k, mean(rr.map(r => r.data[k]))]))
-      }]))
-    };
+    const bySite = {};
+    for(const site of state.sites){
+      const srs = rs.filter(r => r.site === site.origin);
+      if(!srs.length) continue;
+      const byCol = {};
+      srs.forEach(r => { (byCol[r.collection] = byCol[r.collection] || []).push(r); });
+      const byRole = {};
+      srs.forEach(r => { if(r.key && !byRole[r.key]) byRole[r.key] = { path: r.path, average: avgOf([r], mean) }; });
+      bySite[site.label] = {
+        origin: site.origin,
+        primary: !!site.primary,
+        urls_discovered: site.items.length,
+        pages_measured: srs.length,
+        average: avgOf(srs, mean),
+        median: avgOf(srs, median),
+        by_collection: Object.fromEntries(Object.entries(byCol).map(([c, rr]) => [c, { pages: rr.length, average: avgOf(rr, mean) }])),
+        key_pages: byRole
+      };
+    }
+    summary[s] = { pages_measured: rs.length, by_site: bySite };
   }
-  download('pagespeed-' + slugOrigin() + '.json', JSON.stringify({
-    site: state.origin, generated_at: new Date().toISOString(),
-    urls_discovered: state.all.length, collections: state.groups.length,
+  download('pagespeed-' + runSlug() + '.json', JSON.stringify({
+    sites: state.sites.map(s => ({ origin: s.origin, label: s.label, primary: !!s.primary,
+                                   urls_discovered: s.items.length, sitemaps: s.sitemaps })),
+    generated_at: new Date().toISOString(),
     summary, results: exportRows()
   }, null, 2), 'application/json');
 });
@@ -1356,7 +1537,7 @@ $('#resStrategy').addEventListener('change', renderResults);
 
 /* --------------------------------------------------------------- wiring */
 function originOf(raw){
-  let v = raw.trim();
+  let v = (raw || '').trim();
   if(!v) return null;
   if(!/^https?:\/\//i.test(v)) v = 'https://' + v;
   try{ return new URL(v).origin; }catch(e){ return null; }
@@ -1366,76 +1547,157 @@ function manualItems(origin){
   return lines.map(l => ({ loc: /^https?:\/\//i.test(l) ? l : (origin || '') + (l.startsWith('/') ? l : '/' + l) }));
 }
 
-$('#discoverBtn').addEventListener('click', async () => {
-  const origin = originOf($('#site').value);
-  $('#setupErr').innerHTML = '';
-  if(!origin){ $('#setupErr').innerHTML = '<div class="err">Enter a valid site URL, for example https://example.com</div>'; return; }
-  state.origin = origin;
-  $('#site').value = origin;
-  localStorage.setItem('pss#site', origin);
+/* --- the site input list ------------------------------------------------- */
+const MAX_SITES = 4;
+function siteInputs(){ return Array.from(document.querySelectorAll('#siteList input')); }
+function siteValues(){ return siteInputs().map(i => i.value.trim()).filter(Boolean); }
+function saveSites(){ localStorage.setItem('pss#sites', JSON.stringify(siteValues())); }
 
+function addSiteRow(value){
+  const list = $('#siteList');
+  if(list.children.length >= MAX_SITES) return;
+  const row = el('div','siterow');
+  const n = el('span','num', String(list.children.length + 1));
+  const inp = document.createElement('input');
+  inp.type = 'url'; inp.spellcheck = false; inp.autocomplete = 'url';
+  inp.placeholder = list.children.length === 0 ? 'https://your-site.com' : 'https://competitor.com';
+  if(value) inp.value = value;
+  inp.addEventListener('change', saveSites);
+  const rm = el('button','rm','×');
+  rm.type = 'button'; rm.title = 'Remove this site';
+  rm.addEventListener('click', () => { row.remove(); renumberSites(); saveSites(); });
+  row.appendChild(n); row.appendChild(inp); row.appendChild(rm);
+  list.appendChild(row);
+  renumberSites();
+}
+function renumberSites(){
+  const rows = Array.from(document.querySelectorAll('#siteList .siterow'));
+  rows.forEach((r, i) => {
+    r.querySelector('.num').textContent = String(i + 1);
+    r.querySelector('.rm').style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+  });
+  $('#addSite').disabled = rows.length >= MAX_SITES;
+  $('#addSite').textContent = rows.length >= MAX_SITES
+    ? 'Four sites is the maximum'
+    : (rows.length > 1 ? '+ Add another site' : '+ Add a site to compare');
+}
+(function initSites(){
+  let saved = [];
+  try{ saved = JSON.parse(localStorage.getItem('pss#sites') || '[]'); }catch(e){}
+  const legacy = localStorage.getItem('pss#site');
+  if(!saved.length && legacy) saved = [legacy];
+  if(!saved.length) saved = [''];
+  saved.slice(0, MAX_SITES).forEach(v => addSiteRow(v));
+  $('#addSite').addEventListener('click', () => { addSiteRow(''); saveSites(); });
+})();
+
+/* --- discovery ----------------------------------------------------------- */
+async function discoverAll(origins){
   const btn = $('#discoverBtn'); btn.disabled = true; btn.textContent = 'Searching…';
   $('#discCard').classList.remove('hidden');
   $('#selCard').classList.add('hidden'); $('#resCard').classList.add('hidden');
-  const log = $('#discLog'); log.innerHTML = ''; $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
-  transport = null;
+  const log = $('#discLog'); log.innerHTML = '';
+  $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
 
   const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30) };
-  let res;
-  try{ res = await discover(origin, opts, log); }
-  catch(e){ res = { urls: [], sitemaps: [], ok: false }; logLine(log, 'Discovery error: ' + e.message, 'bad'); }
+  const sites = [];
+  const notes = [];
 
-  const manual = manualItems(origin);
-  const merged = res.urls.concat(manual.map(m => Object.assign({}, m, { source: 'manual' })));
-  const items = normalise(merged, origin);
+  for(let i = 0; i < origins.length; i++){
+    const origin = origins[i];
+    transport = null;                       // each site negotiates its own transport
+    if(origins.length > 1) logLine(log, (i ? '\n' : '') + '=== ' + hostLabel(origin) + ' ===', 'ok');
+    let res;
+    try{ res = await discover(origin, opts, log); }
+    catch(e){ res = { urls: [], sitemaps: [], ok: false }; logLine(log, 'Discovery error: ' + e.message, 'bad'); }
 
-  btn.disabled = false; btn.textContent = 'Find sitemap and sample URLs';
+    /* A manual list only makes sense for a single-site run; with several sites it
+       would be ambiguous which site the pasted URLs belong to. */
+    const manual = origins.length === 1 ? manualItems(origin) : [];
+    const merged = res.urls.concat(manual.map(m => Object.assign({}, m, { source: 'manual' })));
+    const items = normalise(merged, origin);
 
-  if(!items.length){
+    if(!items.length){
+      const why = res && res.noTransport
+        ? 'could not be reached from the browser (it blocks cross-origin requests and no proxy could fetch it)'
+        : 'published no sitemap at robots.txt or any common path';
+      logLine(log, '  ' + hostLabel(origin) + ' ' + why, 'bad');
+      notes.push('<b>' + esc(hostLabel(origin)) + '</b> ' + esc(why));
+      continue;
+    }
+    logLine(log, '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
+      (manual.length ? ' (including ' + manual.length + ' manual)' : ''), 'ok');
+    sites.push({
+      origin, label: hostLabel(origin), primary: sites.length === 0,
+      items, groups: [], sitemaps: res.sitemaps,
+      transport: transport ? transport.name : 'direct'
+    });
+  }
+
+  btn.disabled = false; btn.textContent = 'Find sitemaps and sample URLs';
+
+  if(!sites.length){
     $('#discStat').textContent = 'no URLs';
-    const why = res && res.noTransport
-      ? '<b>Could not reach ' + esc(origin) + ' from the browser.</b> The site blocks cross-origin requests and no public proxy could fetch it either. '
-      : '<b>No sitemap found.</b> The site may not publish one at a common path, or its robots.txt does not declare one. ';
-    $('#discSummary').innerHTML = '<div class="err">' + why +
-      'Paste URLs into the manual list under “Sampling and run options” and press “Use manual list only”.</div>';
+    $('#discSummary').innerHTML = '<div class="err"><b>Nothing to measure.</b><br>' + notes.join('<br>') +
+      '<br><br>For a single site you can paste URLs into the manual list under “Sampling and run options” and press “Use manual list only”.</div>';
     return;
   }
-  $('#discStat').textContent = items.length + ' URLs';
-  logLine(log, '', 'dim');
-  logLine(log, 'Kept ' + items.length + ' unique, same-host, non-asset URLs' + (manual.length ? ' (including ' + manual.length + ' manual)' : '') + '.', 'ok');
-  $('#discSummary').innerHTML = '<div class="note"><b>' + items.length + ' URLs</b> from <b>' + res.sitemaps.length + '</b> sitemap file' +
-    (res.sitemaps.length === 1 ? '' : 's') + (transport && transport.name !== 'direct' ? ' (fetched through the <b>' + esc(transport.name) + '</b> public proxy, because the site blocks direct browser access)' : ' (fetched directly, no proxy needed)') + '.</div>';
-  buildGroupsAndSample(items);
+
+  state.sites = sites;
+  const totalUrls = sites.reduce((n,s) => n + s.items.length, 0);
+  $('#discStat').textContent = totalUrls + ' URLs' + (sites.length > 1 ? ' / ' + sites.length + ' sites' : '');
+  let html = '<div class="note">' + sites.map(s =>
+    '<b>' + esc(s.label) + '</b>: ' + s.items.length + ' URLs from ' + s.sitemaps.length + ' sitemap file' +
+    (s.sitemaps.length === 1 ? '' : 's') +
+    (s.transport !== 'direct' ? ' (via the ' + esc(s.transport) + ' proxy)' : '')
+  ).join('<br>') + '</div>';
+  if(notes.length) html += '<div class="err">' + notes.join('<br>') + '</div>';
+  $('#discSummary').innerHTML = html;
+
+  buildGroupsAndSample();
   $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+$('#discoverBtn').addEventListener('click', () => {
+  $('#setupErr').innerHTML = '';
+  const raw = siteValues();
+  const origins = uniq(raw.map(originOf).filter(Boolean));
+  if(!origins.length){
+    $('#setupErr').innerHTML = '<div class="err">Enter at least one valid site URL, for example https://example.com</div>';
+    return;
+  }
+  // normalise what is shown back to the user
+  siteInputs().forEach((inp, i) => { if(origins[i]) inp.value = origins[i]; });
+  saveSites();
+  discoverAll(origins);
 });
 
 $('#manualOnlyBtn').addEventListener('click', () => {
-  const origin = originOf($('#site').value) || originOf(($('#manual').value.split(/\r?\n/)[0] || ''));
+  const origin = originOf(siteValues()[0]) || originOf(($('#manual').value.split(/\r?\n/)[0] || ''));
   if(!origin){ $('#setupErr').innerHTML = '<div class="err">Enter a site URL or at least one absolute URL in the manual list.</div>'; return; }
-  state.origin = origin;
   const items = normalise(manualItems(origin), origin);
   if(!items.length){ $('#setupErr').innerHTML = '<div class="err">The manual list is empty or contains no URLs on ' + esc(origin) + '.</div>'; return; }
   $('#setupErr').innerHTML = '';
   $('#discCard').classList.add('hidden');
-  buildGroupsAndSample(items);
+  state.sites = [{ origin, label: hostLabel(origin), primary: true, items, groups: [], sitemaps: [], transport: 'manual' }];
+  buildGroupsAndSample();
   $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
 });
 
-$('#reSample').addEventListener('click', () => {
-  const perGroup = clampInt($('#perGroup').value, 1, 10, 10);
-  const totalCap = clampInt($('#totalCap').value, 1, 100, 100);
-  state.selected = sampleAll(state.groups, perGroup, totalCap);
-  renderSelection();
-});
+$('#reSample').addEventListener('click', buildGroupsAndSample);
 $('#selNone').addEventListener('click', () => { state.selected = new Set(); renderSelection(); });
 $('#runBtn').addEventListener('click', () => { runTest().catch(e => { $('#runErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; state.running = false; $('#runBtn').disabled = false; $('#stopBtn').disabled = true; }); });
 $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn').disabled = true; $('#runNote').textContent = 'Stopping after in-flight requests…'; });
-['#perGroup','#totalCap','#stMobile','#stDesktop'].forEach(s => $(s).addEventListener('change', () => { if(state.groups.length) renderSelection(); }));
+['#perGroup','#totalCap','#stMobile','#stDesktop'].forEach(s => $(s).addEventListener('change', () => { if(state.sites.length) renderSelection(); }));
 
-/* deep link: ?site=example.com */
+/* deep link: ?site=a.com&site=b.com */
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
-  if(q.get('site')) $('#site').value = q.get('site');
+  const sites = q.getAll('site').filter(Boolean);
+  if(sites.length){
+    $('#siteList').innerHTML = '';
+    sites.slice(0, MAX_SITES).forEach(v => addSiteRow(v));
+  }
   if(q.get('key')) $('#key').value = q.get('key');
 })();
 </script>
