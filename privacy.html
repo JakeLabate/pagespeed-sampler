@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy — PageSpeed Sampler</title>
+<meta name="description" content="How PageSpeed Sampler handles data. It runs entirely in your browser and has no server.">
+<link rel="stylesheet" href="_shared.css">
+</head>
+<body>
+<div class="wrap">
+<p class="eyebrow">PageSpeed Sampler</p>
+<h1>Privacy Policy</h1>
+<p class="updated">Last updated 3 September 2026</p>
+
+<div class="callout">
+<p><strong>The short version.</strong> PageSpeed Sampler is a single HTML page with no server and no database. Everything it does happens in your own browser. Nothing you type into it is transmitted to, stored by, or visible to Jake Labate or anyone else operating this tool, because there is nothing operating it. It is a static file.</p>
+</div>
+
+<h2>Who this covers</h2>
+<p>This policy applies to PageSpeed Sampler, published at <a href="https://jakelabate.github.io/pagespeed-sampler/">jakelabate.github.io/pagespeed-sampler</a> and maintained by Jake Labate, SEO Consultant.</p>
+
+<h2>What is stored, and where</h2>
+<p>The tool saves your settings in your browser's <code>localStorage</code> so you do not have to retype them. That includes the site URLs you enter, your PageSpeed Insights API key, your Google OAuth client ID, your client or project name, and your sampling preferences.</p>
+<p>This data never leaves your browser. It is not synced, not backed up, and not readable by anyone else. Clearing your browser's site data for this domain deletes all of it.</p>
+
+<h2>What is sent, and to whom</h2>
+<p>The tool makes requests to third parties on your behalf. It has no servers of its own, so there is no intermediate party.</p>
+<ul>
+<li><strong>Google PageSpeed Insights API.</strong> Each URL you choose to measure is sent to <code>pagespeedonline.googleapis.com</code>, along with your API key if you supplied one. This is how the measurement happens. Google's handling of those requests is governed by the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a>.</li>
+<li><strong>The sites you measure.</strong> To find a sitemap, the tool requests <code>robots.txt</code> and common sitemap paths from the sites you enter, directly from your browser.</li>
+<li><strong>Public CORS proxies.</strong> Most sites do not allow a browser to read their sitemap cross-origin. When a direct request is blocked, the tool retries through a public proxy so it can read the file. The proxies it may use are allorigins, codetabs, corsproxy.io, isomorphic-git and thingproxy. Only the public sitemap URL is passed to them; your API key and your settings are never sent to a proxy. You can switch this off with the <em>Allow public CORS proxies</em> checkbox, in which case only sites that permit direct access will be discoverable.</li>
+<li><strong>Google Sheets and Drive.</strong> Only if you choose to create a Google Sheet. See the next section.</li>
+</ul>
+
+<h2>Google account access</h2>
+<p>The Google Sheets export is optional and off unless you configure it. When you use it, the tool requests a single scope: <code>https://www.googleapis.com/auth/drive.file</code>.</p>
+<p>That scope grants access <strong>only to files this application itself creates</strong>. It cannot list, read, open, modify or delete any other file in your Google Drive, and it cannot see that those other files exist. The tool uses it for exactly one thing: creating a new spreadsheet containing your measurement results, in your own Drive, owned by you.</p>
+<p>The resulting access token is held in the memory of the browser tab for the duration of that action and is never written to storage or transmitted anywhere other than Google's own API endpoints.</p>
+<p>PageSpeed Sampler's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including its Limited Use requirements. Data obtained through Google APIs is not transferred to any third party, is not used for advertising, and is not read by any human.</p>
+<p>You can revoke this access at any time at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">myaccount.google.com/permissions</a>. Spreadsheets already created stay in your Drive and remain yours.</p>
+
+<h2>Analytics and tracking</h2>
+<p>There are none. No analytics, no tag manager, no advertising, no cookies, no fingerprinting, no error reporting service. The page loads two external scripts, both only when needed: the ExcelJS library from cdnjs for the Excel export, and Google Identity Services for the Sheets sign-in.</p>
+
+<h2>Hosting</h2>
+<p>The page is served as a static file by GitHub Pages. GitHub receives standard web server request logs, such as IP address and user agent, as it does for any page it serves. This is outside the tool's control and is covered by the <a href="https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement" target="_blank" rel="noopener">GitHub Privacy Statement</a>.</p>
+
+<h2>Children</h2>
+<p>This is a professional technical tool. It is not directed at children and collects nothing from anyone.</p>
+
+<h2>Changes</h2>
+<p>If this policy changes, the date at the top changes with it, and the previous versions remain visible in the <a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">public commit history</a>.</p>
+
+<h2>Contact</h2>
+<p>Jake Labate, SEO Consultant. <a href="mailto:jake.a.labate@gmail.com">jake.a.labate@gmail.com</a></p>
+
+<footer>
+<a href="./">PageSpeed Sampler</a>
+<a href="terms.html">Terms of Service</a>
+<a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+</footer>
+</div>
+</body>
+</html>
