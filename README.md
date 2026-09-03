@@ -21,16 +21,37 @@ Insights API, and reports the averages.
    similar) are pinned first; the remainder is an even, deterministic spread across the
    collection rather than the first N URLs. The homepage is always included. Allocation
    is round-robin so one huge collection cannot eat the entire budget.
-4. **Measures** each URL through the PageSpeed Insights v5 API, mobile and/or desktop.
-   Every call is fired in the same tick by default, so a 100-URL two-strategy run is 200
-   requests in flight at once rather than a queue. A rolling 230-requests-per-minute
-   guard keeps that under Google's 240/min project quota, and a shared circuit breaker
-   pauses the whole run for seven seconds the moment any call comes back 429, then
-   retries. Batching can be dialled down to 32 / 16 / 8 / 4 at a time if you would
-   rather trickle.
+4. **Measures** each URL through the PageSpeed Insights v5 API, mobile and/or desktop,
+   concurrently. See [Concurrency](#concurrency) below for how wide it actually goes and
+   why.
 5. **Reports** site-wide mean and median for Performance, LCP, CLS, TBT, FCP, TTFB and
    Speed Index, plus a per-collection breakdown, a sortable per-page table, real-user
    CrUX field data where Google has it, and CSV / JSON export.
+
+## Concurrency
+
+The 240-queries-per-minute project quota is not the binding constraint. Each PSI call
+holds a Lighthouse run on Google's side for 10 to 30 seconds, and one project's share of
+that pool is far narrower than 240. Firing 200 calls in one tick saturates it, and the
+overflow comes back as `500 Lighthouse returned error: ERRORED_DOCUMENT_REQUEST`, not as
+`429`. Those failed calls still count against the daily quota, so the naive burst is both
+slower and more expensive than it looks.
+
+So the runner treats concurrency as something to discover rather than declare:
+
+- Opens at **40 in flight** and climbs 1.4x every 8 consecutive successes, up to the
+  batching width you picked.
+- **Halves the ceiling** after 3 clustered errors, down to a floor of 5, then climbs
+  again. Additive increase, multiplicative decrease.
+- A **429 pauses the entire batch** for 7 seconds. A cluster of 5xx pauses it for 3.
+- A rolling **230-requests-per-minute** admission guard sits underneath all of it.
+- Up to **4 attempts per call**, then **3 retry sweeps** over whatever still failed, each
+  sweep running 4 at a time. Retryable causes only: a permanent error like `NO_FCP` or an
+  invalid URL is not swept.
+- Anything still failing is grouped by cause in the results with a **Retry** button.
+
+Against a mock that 500s above 20 concurrent, this converges on the real ceiling and
+completes 76 of 76 calls, wasting 28 requests learning where the wall is.
 
 ## API key
 

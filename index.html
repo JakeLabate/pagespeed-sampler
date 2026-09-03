@@ -220,7 +220,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
             <option value="8">8 at a time</option>
             <option value="4">4 at a time</option>
           </select>
-          <div class="hint">Every call is fired in one tick, held only by a 230/min guard so Google's quota is never tripped.</div>
+          <div class="hint">Calls run concurrently up to this width. The run opens at 40 in flight and climbs or backs off on its own, since Google's Lighthouse pool, not the 240/min quota, is the real ceiling.</div>
         </div>
         <div>
           <label class="f" for="maxChild">Max child sitemaps</label>
@@ -724,7 +724,7 @@ function sampleAll(groups, perGroup, totalCap){
 /* ------------------------------------------------------------- app state */
 const state = {
   origin: null, all: [], groups: [], selected: new Set(),
-  results: [], running: false, cancel: false, strategies: []
+  results: [], index: new Map(), running: false, cancel: false, strategies: []
 };
 
 function renderSelection(){
@@ -819,30 +819,85 @@ function extractRun(json){
   };
 }
 
-/* Google allows 240 PSI queries per minute per project. "All at once" fires every
-   job simultaneously; this limiter is what keeps that from tripping the quota, and
-   it backs the whole run off together the moment Google returns a 429. */
+/* Google allows 240 PSI queries per minute per project, but the quota is not the
+   real ceiling: each request holds a Lighthouse run for 10-30s, and one project's
+   share of that pool is far smaller than 240. Flooding it makes the backend return
+   500s rather than 429s. So the limiter does three things: caps admission rate,
+   holds an adaptive in-flight ceiling that halves when errors cluster and recovers
+   when they stop, and pauses the whole batch on a 429. */
 const limiter = {
   perMinute: 230,
   starts: [],
   pausedUntil: 0,
   inFlight: 0,
+  ceiling: 64,
+  maxCeiling: 64,
+  floor: 5,
+  okStreak: 0,
+  recentErr: 0,
   throttled: 0,
-  reset(perMinute){ this.perMinute = perMinute; this.starts = []; this.pausedUntil = 0; this.inFlight = 0; this.throttled = 0; },
+  serverErrors: 0,
+  /* Opening at the full burst means the first wave saturates Google's Lighthouse
+     pool and every request above its real capacity comes back 500, burning quota
+     to learn a number. So open at a sane width and climb toward the burst on
+     sustained success instead: additive increase, multiplicative decrease. */
+  reset(perMinute, ceiling){
+    this.perMinute = perMinute;
+    this.starts = []; this.pausedUntil = 0; this.inFlight = 0;
+    this.maxCeiling = ceiling;
+    this.ceiling = Math.min(ceiling, 40);
+    this.okStreak = 0; this.recentErr = 0; this.throttled = 0; this.serverErrors = 0;
+  },
   async acquire(){
     while(true){
       if(state.cancel) throw new Error('cancelled');
       const now = Date.now();
       if(now < this.pausedUntil){ await sleep(Math.min(900, this.pausedUntil - now)); continue; }
+      if(this.inFlight >= this.ceiling){ await sleep(150); continue; }
       this.starts = this.starts.filter(t => now - t < 60000);
       if(this.starts.length < this.perMinute){ this.starts.push(now); this.inFlight++; return; }
       const wait = 60000 - (now - this.starts[0]) + 60;
       await sleep(Math.min(wait, 1500));
     }
   },
-  release(){ this.inFlight = Math.max(0, this.inFlight - 1); },
-  penalise(){ this.throttled++; this.pausedUntil = Date.now() + 7000; }
+  release(ok){
+    this.inFlight = Math.max(0, this.inFlight - 1);
+    if(ok){
+      this.okStreak++;
+      // creep the ceiling back up once the backend is clearly coping again
+      if(this.okStreak >= 8 && this.ceiling < this.maxCeiling){
+        this.okStreak = 0;
+        this.ceiling = Math.min(this.maxCeiling, Math.ceil(this.ceiling * 1.4));
+      }
+    }
+  },
+  /* kind: 'rate' for 429, 'server' for 5xx */
+  backoff(kind){
+    this.okStreak = 0;
+    if(kind === 'rate'){ this.throttled++; this.pausedUntil = Date.now() + 7000; }
+    else { this.serverErrors++; }
+    this.recentErr++;
+    if(this.recentErr >= 3){
+      this.recentErr = 0;
+      const next = Math.max(this.floor, Math.floor(this.ceiling / 2));
+      if(next < this.ceiling){
+        this.ceiling = next;
+        if(kind === 'server') this.pausedUntil = Math.max(this.pausedUntil, Date.now() + 3000);
+      }
+    }
+  }
 };
+
+/* PSI puts the useful detail in the body even on a 500, e.g.
+   "Lighthouse returned error: ERRORED_DOCUMENT_REQUEST" or "NO_FCP". Read it. */
+function psiErrorMessage(json, status){
+  const m = json && json.error && json.error.message ? String(json.error.message) : null;
+  if(!m) return 'HTTP ' + status + ' with no detail from Google';
+  return m.replace(/^Lighthouse returned error:\s*/i, '').trim().slice(0, 220);
+}
+function isRetryableMessage(m){
+  return /timed out|timeout|ERRORED_DOCUMENT_REQUEST|INTERNAL|internal error|try again|unavailable|temporarily|overload|quota|rate limit|too many/i.test(m);
+}
 
 async function psiRun(url, strategy, key, categories){
   const p = new URLSearchParams();
@@ -851,41 +906,47 @@ async function psiRun(url, strategy, key, categories){
   categories.forEach(c => p.append('category', c));
   if(key) p.set('key', key);
   const endpoint = PSI_ENDPOINT + '?' + p.toString();
+  const MAX = 4;
   let lastErr = 'unknown error';
-  for(let attempt = 0; attempt < 3; attempt++){
+  for(let attempt = 0; attempt < MAX; attempt++){
     if(state.cancel) throw new Error('cancelled');
     await limiter.acquire();
+    let released = false;
     try{
       const r = await fetch(endpoint, { method:'GET' });
+      const json = await r.json().catch(() => null);
+      limiter.release(r.ok); released = true;
+
+      if(r.ok){
+        if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
+        return extractRun(json);
+      }
+
+      const msg = psiErrorMessage(json, r.status);
       if(r.status === 429){
-        limiter.penalise();
-        lastErr = 'HTTP 429 rate limited by Google';
-        limiter.release();
-        await sleep(1200 + Math.random() * 1500);
-        continue;
+        limiter.backoff('rate');
+        lastErr = 'rate limited by Google (' + msg + ')';
+        if(attempt < MAX - 1){ await sleep(1500 + Math.random() * 2000); continue; }
+        throw new Error(lastErr);
       }
       if(r.status >= 500){
-        lastErr = 'HTTP ' + r.status + ' (Google-side error)';
-        limiter.release();
-        await sleep(2200 * (attempt + 1) + Math.random() * 1200);
-        continue;
+        limiter.backoff('server');
+        lastErr = msg;
+        if(attempt < MAX - 1){ await sleep(2500 * (attempt + 1) + Math.random() * 2000); continue; }
+        throw new Error(lastErr);
       }
-      const json = await r.json().catch(() => null);
-      limiter.release();
-      if(!r.ok){
-        const msg = json && json.error && json.error.message ? json.error.message : ('HTTP ' + r.status);
-        if(/quota|rate limit|too many/i.test(msg) && attempt < 2){
-          limiter.penalise(); lastErr = msg; await sleep(1500); continue;
-        }
-        throw new Error(msg);
+      // 4xx other than 429: usually a real problem with the URL or the key
+      if(isRetryableMessage(msg) && attempt < MAX - 1){
+        lastErr = msg; await sleep(1800 * (attempt + 1)); continue;
       }
-      if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
-      return extractRun(json);
+      throw new Error(msg);
     }catch(e){
-      limiter.release();
+      if(!released) limiter.release(false);
       if(e.message === 'cancelled') throw e;
       lastErr = e.message || String(e);
-      if(attempt < 2) await sleep(1500 * (attempt + 1));
+      if(attempt < MAX - 1 && isRetryableMessage(lastErr)) { await sleep(1800 * (attempt + 1)); continue; }
+      if(attempt < MAX - 1 && /fetch|network|Load failed/i.test(lastErr)) { await sleep(1800 * (attempt + 1)); continue; }
+      break;
     }
   }
   throw new Error(lastErr);
@@ -920,10 +981,11 @@ async function runTest(){
   state.strategies = strategies;
 
   const urls = Array.from(state.selected);
-  const jobs = [];
-  for(const it of urls) for(const s of strategies) jobs.push({ item: it, strategy: s });
+  const allJobs = [];
+  for(const it of urls) for(const s of strategies) allJobs.push({ item: it, strategy: s });
 
-  state.running = true; state.cancel = false; state.results = [];
+  state.running = true; state.cancel = false;
+  state.results = []; state.index = new Map();
   $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
   $('#progWrap').classList.remove('hidden');
   $('#runErr').innerHTML = '';
@@ -933,43 +995,126 @@ async function runTest(){
 
   const t0 = Date.now();
   const chosen = parseInt($('#conc').value, 10) || 0;
-  const conc = chosen > 0 ? chosen : jobs.length;   // 0 = fire everything in one tick
-  limiter.reset(230);
-  let failures = 0;
+  const burst = chosen > 0 ? chosen : allJobs.length;   // 0 = fire everything in one tick
+  limiter.reset(230, burst);
+
   const ticker = setInterval(() => {
     if(!state.running) return;
     const f = $('#inFlight');
-    if(f) f.textContent = limiter.inFlight ? limiter.inFlight + ' in flight' : '';
+    if(!f) return;
+    const bits = [];
+    if(limiter.inFlight) bits.push(limiter.inFlight + ' in flight');
+    if(limiter.ceiling < limiter.maxCeiling) bits.push('ceiling ' + limiter.ceiling);
+    f.textContent = bits.join(' · ');
   }, 400);
 
-  await runPool(jobs, conc, async job => {
-    const data = await psiRun(job.item.url, job.strategy, key, cats);
-    return data;
-  }, (done, total, res) => {
-    const pct = Math.round(done / total * 100);
-    $('#progBar').style.width = pct + '%';
-    if(res && !res.ok) failures++;
-    const elapsed = (Date.now() - t0) / 1000;
-    const eta = done ? Math.round(elapsed / done * (total - done)) : 0;
-    $('#runNote').textContent = done + ' of ' + total + ' complete' +
-      (failures ? ' · ' + failures + ' failed' : '') +
-      (limiter.throttled ? ' · ' + limiter.throttled + ' throttled by Google, backing off' : '') +
-      (done < total ? ' · about ' + (eta > 90 ? Math.round(eta/60) + ' min' : eta + ' s') + ' left'
-                    : ' · done in ' + Math.round(elapsed) + ' s');
-    if(res){
-      state.results.push({
-        url: res.item.item.url, path: res.item.item.path, key: res.item.item.key,
-        collection: collectionOf(res.item.item), strategy: res.item.strategy,
-        ok: res.ok, error: res.ok ? null : res.error, data: res.ok ? res.value : null
-      });
-      renderResults();
+  /* Record a result, replacing any earlier attempt at the same url+strategy so a
+     retry sweep updates the row instead of duplicating it. */
+  function record(job, ok, valueOrError){
+    const k = job.item.url + '|' + job.strategy;
+    const row = {
+      item: job.item,
+      url: job.item.url, path: job.item.path, key: job.item.key,
+      collection: collectionOf(job.item), strategy: job.strategy,
+      ok, error: ok ? null : valueOrError, data: ok ? valueOrError : null
+    };
+    if(state.index.has(k)) state.results[state.index.get(k)] = row;
+    else { state.index.set(k, state.results.length); state.results.push(row); }
+  }
+
+  const totalJobs = allJobs.length;
+  let pending = allJobs;
+  let sweep = 0;
+  const MAX_SWEEPS = 3;
+
+  while(pending.length && sweep < MAX_SWEEPS && !state.cancel){
+    /* First pass runs at the chosen burst. Retry sweeps go deliberately slowly:
+       a 500 from PSI usually means the backend is saturated, and hitting it with
+       the same burst again just reproduces the failure. */
+    const limit = sweep === 0 ? burst : Math.min(4, pending.length);
+    if(sweep > 0){
+      limiter.reset(120, limit);
+      $('#runNote').textContent = 'Retry sweep ' + sweep + ': re-running ' + pending.length +
+        ' failed call' + (pending.length > 1 ? 's' : '') + ' at ' + limit + ' at a time…';
+      await sleep(5000);
+      if(state.cancel) break;
     }
-  });
+
+    const passResults = await runPool(pending, limit, async job => {
+      return await psiRun(job.item.url, job.strategy, key, cats);
+    }, (doneInPass, totalInPass, res) => {
+      if(res) record(res.item, res.ok, res.ok ? res.value : res.error);
+      const settled = state.results.length;
+      const failures = state.results.filter(r => !r.ok).length;
+      $('#progBar').style.width = Math.round(settled / totalJobs * 100) + '%';
+      const elapsed = (Date.now() - t0) / 1000;
+      const remaining = totalJobs - (settled - failures);
+      const eta = settled ? Math.round(elapsed / settled * Math.max(0, totalJobs - settled)) : 0;
+      const parts = [settled + ' of ' + totalJobs + ' complete'];
+      if(sweep > 0) parts.push('retry sweep ' + sweep);
+      if(failures) parts.push(failures + ' failed');
+      if(limiter.throttled) parts.push(limiter.throttled + ' rate limited');
+      if(limiter.serverErrors) parts.push(limiter.serverErrors + ' server errors, easing off');
+      parts.push(settled < totalJobs
+        ? 'about ' + (eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s') + ' left'
+        : 'done in ' + Math.round(elapsed) + ' s');
+      $('#runNote').textContent = parts.join(' · ');
+      renderResults();
+    });
+
+    pending = passResults.filter(r => !r.ok && isRetryableMessage(r.error || '')).map(r => r.item);
+    sweep++;
+  }
 
   state.running = false;
   clearInterval(ticker);
   const f = $('#inFlight'); if(f) f.textContent = '';
   $('#stopBtn').disabled = true; $('#reSample').disabled = false; $('#runBtn').disabled = false;
+  const failed = state.results.filter(r => !r.ok).length;
+  const secs = Math.round((Date.now() - t0) / 1000);
+  $('#runNote').textContent = (state.results.length - failed) + ' of ' + totalJobs + ' measured' +
+    (failed ? ' · ' + failed + ' still failing after ' + sweep + ' pass' + (sweep > 1 ? 'es' : '') : '') +
+    ' · ' + (secs > 90 ? Math.round(secs / 60) + ' min' : secs + ' s');
+  renderResults();
+}
+
+async function retryFailures(strategyFilter){
+  if(state.running) return;
+  const failed = state.results.filter(r => !r.ok && (!strategyFilter || r.strategy === strategyFilter) && r.item);
+  if(!failed.length) return;
+  const key = $('#key').value.trim();
+  const cats = ['performance'].concat($('#allCats').checked ? ['accessibility','best-practices','seo'] : []);
+  state.running = true; state.cancel = false;
+  $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
+  $('#progWrap').classList.remove('hidden'); $('#progBar').style.width = '0%';
+
+  const jobs = failed.map(r => ({ item: r.item, strategy: r.strategy }));
+  const limit = Math.min(4, jobs.length);
+  limiter.reset(120, limit);
+  const t0 = Date.now();
+
+  await runPool(jobs, limit, async job => psiRun(job.item.url, job.strategy, key, cats), (done, total, res) => {
+    if(res){
+      const k = res.item.item.url + '|' + res.item.strategy;
+      const i = state.index.get(k);
+      if(i != null){
+        state.results[i] = Object.assign({}, state.results[i], {
+          ok: res.ok, error: res.ok ? null : res.error, data: res.ok ? res.value : null
+        });
+      }
+    }
+    $('#progBar').style.width = Math.round(done / total * 100) + '%';
+    const fixed = jobs.length - state.results.filter(r => !r.ok).length;
+    $('#runNote').textContent = 'Retrying: ' + done + ' of ' + total + ' · ' + Math.round((Date.now()-t0)/1000) + ' s';
+    renderResults();
+  });
+
+  state.running = false;
+  $('#stopBtn').disabled = true; $('#reSample').disabled = false; $('#runBtn').disabled = false;
+  const stillFailing = state.results.filter(r => !r.ok).length;
+  $('#runNote').textContent = stillFailing
+    ? stillFailing + ' still failing after retry'
+    : 'All pages measured after retry';
   renderResults();
 }
 
@@ -1010,10 +1155,31 @@ function renderResults(){
     box.appendChild(urlTable(okRows));
   }
   if(failRows.length){
+    const byErr = new Map();
+    failRows.forEach(r => {
+      const k = (r.error || 'unknown').slice(0, 160);
+      if(!byErr.has(k)) byErr.set(k, []);
+      byErr.get(k).push(r);
+    });
     const d = el('div','err');
-    d.innerHTML = '<b>' + failRows.length + ' request' + (failRows.length>1?'s':'') + ' failed (' + active + ')</b><br>' +
-      failRows.slice(0, 12).map(r => esc(r.path) + ': ' + esc(r.error)).join('<br>') +
-      (failRows.length > 12 ? '<br>… and ' + (failRows.length - 12) + ' more' : '');
+    let html = '<b>' + failRows.length + ' of ' + rows.length + ' ' + esc(active) +
+      ' request' + (failRows.length > 1 ? 's' : '') + ' failed</b>';
+    for(const [msg, rs] of Array.from(byErr).sort((a,b) => b[1].length - a[1].length)){
+      html += '<div style="margin-top:8px"><b>' + rs.length + '&times;</b> ' + esc(msg) +
+        '<div style="opacity:.8;margin-top:2px">' +
+        rs.slice(0, 6).map(r => esc(r.path)).join(', ') +
+        (rs.length > 6 ? ' and ' + (rs.length - 6) + ' more' : '') + '</div></div>';
+    }
+    if(/ERRORED_DOCUMENT_REQUEST|500|internal|timed out|timeout/i.test(Array.from(byErr.keys()).join(' '))){
+      html += '<div style="margin-top:10px;opacity:.85">A 500 from PageSpeed usually means Google\'s Lighthouse pool was saturated, not that the page is broken. ' +
+        'Retrying below runs the failures 4 at a time, which almost always clears them.</div>';
+    }
+    d.innerHTML = html;
+    const b = el('button','btn ghost sm','Retry the ' + failRows.length + ' failed call' + (failRows.length>1?'s':''));
+    b.style.marginTop = '12px';
+    b.disabled = state.running;
+    b.addEventListener('click', () => retryFailures(active));
+    d.appendChild(b);
     box.appendChild(d);
   }
 }
