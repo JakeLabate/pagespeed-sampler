@@ -550,21 +550,41 @@ async function probeTransport(origin, allowProxy, log){
   return null;
 }
 
-async function fetchText(url, { timeout = 20000 } = {}){
-  if(transport){
-    const r = await rawFetch(transport.url(url), timeout);
-    if(r.ok && r.text && r.text.length > 8) return { text: r.text, via: transport.name };
-    // one silent retry through the other transports, in case this file alone is blocked
-    for(const p of PROXIES){
-      if(p === transport) continue;
-      const r2 = await rawFetch(p.url(url), timeout);
-      if(r2.ok && r2.text && r2.text.length > 8){ return { text: r2.text, via: p.name }; }
-    }
+const proxied = () => !!(transport && transport.name !== 'direct');
+
+/* A public proxy adds a full extra round trip and rate-limits, so proxied
+   requests get a longer window than direct ones. */
+function defaultTimeout(){ return proxied() ? 35000 : 20000; }
+
+/* This used to walk all five remaining transports on any failure, which meant a
+   single slow child sitemap cost up to two minutes and hammered a free proxy
+   with six sequential attempts. A timeout means slow, not blocked, so it retries
+   the same transport with a wider window; only a non-timeout failure is worth
+   trying somewhere else, and then only once. */
+async function fetchText(url, { timeout, tries = 2 } = {}){
+  const base = timeout || defaultTimeout();
+  if(!transport){
+    const r = await rawFetch(url, base);
+    if(r.ok && r.text) return { text: r.text, via: 'direct' };
     throw new Error(r.why || 'unreachable');
   }
-  const r = await rawFetch(url, timeout);
-  if(r.ok && r.text) return { text: r.text, via: 'direct' };
-  throw new Error(r.why || 'unreachable');
+  let last = null;
+  for(let i = 0; i < tries; i++){
+    const r = await rawFetch(transport.url(url), base + i * 12000);
+    if(r.ok && r.text && r.text.length > 8) return { text: r.text, via: transport.name };
+    last = r;
+    if(r.why !== 'timeout') break;          // a different failure will not be fixed by waiting
+    await sleep(500);
+  }
+  if(last && last.why !== 'timeout'){
+    for(const pr of PROXIES){
+      if(pr === transport) continue;
+      const r2 = await rawFetch(pr.url(url), base);
+      if(r2.ok && r2.text && r2.text.length > 8) return { text: r2.text, via: pr.name };
+      break;                                 // one alternate, not all of them
+    }
+  }
+  throw new Error((last && last.why) || 'unreachable');
 }
 
 async function mapLimit(items, limit, fn){
@@ -661,7 +681,7 @@ async function discover(origin, opts, log){
   const roots = [];
 
   const tp = await probeTransport(origin, opts.allowProxy, log);
-  if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true };
+  if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true, rootsFound: 0, childFailures: [] };
 
   // 1. robots.txt is authoritative when it declares a sitemap
   logLine(log, 'GET /robots.txt', 'dim');
@@ -681,9 +701,9 @@ async function discover(origin, opts, log){
   // 2. fall back to the common path list, probed in parallel
   if(!roots.length){
     logLine(log, 'Probing ' + SITEMAP_PATHS.length + ' common sitemap paths…', 'dim');
-    const hits = await mapLimit(SITEMAP_PATHS, 6, async path => {
+    const hits = await mapLimit(SITEMAP_PATHS, proxied() ? 3 : 6, async path => {
       try{
-        const r = await fetchText(origin + path, { timeout: 12000 });
+        const r = await fetchText(origin + path, { timeout: proxied() ? 20000 : 12000, tries: 1 });
         const parsed = parseSitemap(r.text, origin + path);
         if(parsed.kind !== 'unknown' && (parsed.urls.length || parsed.children.length)) return { path, parsed };
       }catch(e){}
@@ -700,27 +720,28 @@ async function discover(origin, opts, log){
     if(real.length) roots.push(origin + real[0].path);
   }
 
-  if(!roots.length) return { urls: [], sitemaps: [], ok: false };
+  if(!roots.length) return { urls: [], sitemaps: [], ok: false, rootsFound: 0, childFailures: [] };
 
   // 3. walk index -> children, breadth first, in parallel
   let queue = roots.slice();
   const walked = [];
+  const failed = [];
   let depth = 0;
   while(queue.length && walked.length < opts.maxChild && depth < 5){
     depth++;
     const batch = queue.filter(u => !seenSitemaps.has(u)).slice(0, opts.maxChild - walked.length);
     batch.forEach(u => seenSitemaps.add(u));
     queue = [];
-    const parsedBatch = await mapLimit(batch, 5, async sm => {
+    const parsedBatch = await mapLimit(batch, proxied() ? 2 : 5, async sm => {
       if(/\.gz$/i.test(sm)) return { sm, skip:'gzip' };
       try{
-        const r = await fetchText(sm, { timeout: 20000 });
+        const r = await fetchText(sm, { tries: 1 });
         return { sm, parsed: parseSitemap(r.text, sm) };
       }catch(e){ return { sm, err: e.message }; }
     });
     for(const b of parsedBatch){
       if(b.skip){ logLine(log, '  skip  ' + shortSm(b.sm) + ' (' + b.skip + ', browsers cannot decompress it)', 'dim'); continue; }
-      if(b.err){ logLine(log, '  fail  ' + shortSm(b.sm) + ' (' + b.err + ')', 'bad'); continue; }
+      if(b.err){ logLine(log, '  fail  ' + shortSm(b.sm) + ' (' + b.err + ')', 'bad'); failed.push(b.sm); continue; }
       walked.push(b.sm);
       const parsed = b.parsed;
       if(parsed.children.length){
@@ -736,7 +757,40 @@ async function discover(origin, opts, log){
     if(found.length > 20000){ logLine(log, '  URL cap reached (20,000)', 'dim'); break; }
   }
   if(queue.length) logLine(log, '  ' + queue.length + ' further child sitemaps skipped (max child sitemaps = ' + opts.maxChild + ')', 'dim');
-  return { urls: found, sitemaps: walked, ok: found.length > 0 };
+
+  /* A child that timed out is slow, not missing. Retry the failures one at a
+     time with a wide window before writing them off, because a batch of them
+     usually means the proxy was saturated rather than the files being absent. */
+  if(failed.length){
+    const SWEEP_CAP = 8;   // a dead host must not hang the run indefinitely
+    const sweep = failed.slice(0, SWEEP_CAP);
+    logLine(log, '  retrying ' + sweep.length + ' timed-out sitemap' + (sweep.length > 1 ? 's' : '') +
+      ' one at a time' + (failed.length > SWEEP_CAP ? ', ' + (failed.length - SWEEP_CAP) + ' left unretried' : '') + '…', 'dim');
+    const stillFailed = failed.slice(SWEEP_CAP);
+    for(const sm of sweep){
+      if(state.cancel) break;
+      try{
+        const r = await fetchText(sm, { timeout: 45000, tries: 1 });
+        const parsed = parseSitemap(r.text, sm);
+        if(parsed.urls.length){
+          walked.push(sm);
+          parsed.urls.forEach(u => found.push({ loc: u.loc, lastmod: u.lastmod || null, source: sm }));
+          logLine(log, '  recovered ' + shortSm(sm) + ' -> ' + parsed.urls.length + ' URLs', 'ok');
+        } else if(parsed.children.length){
+          logLine(log, '  recovered ' + shortSm(sm) + ' (index, ' + parsed.children.length + ' children, not followed on retry)', 'dim');
+          stillFailed.push(sm);
+        } else { stillFailed.push(sm); }
+      }catch(e){
+        stillFailed.push(sm);
+        logLine(log, '  still failing ' + shortSm(sm) + ' (' + e.message + ')', 'bad');
+      }
+    }
+    failed.length = 0;
+    stillFailed.forEach(x => failed.push(x));
+  }
+
+  return { urls: found, sitemaps: walked, ok: found.length > 0,
+           rootsFound: roots.length, childFailures: failed.slice(), childrenSeen: seenSitemaps.size };
 }
 function shortSm(u){ try{ return new URL(u).pathname; }catch(e){ return u; } }
 
@@ -5533,12 +5587,31 @@ async function discoverAll(origins){
     const items = normalise(merged, origin);
 
     if(!items.length){
-      const why = res && res.noTransport
-        ? 'could not be reached from the browser (it blocks cross-origin requests and no proxy could fetch it)'
-        : 'published no sitemap at robots.txt or any common path';
+      /* Saying a site published no sitemap when its robots.txt declared one and
+         the children merely timed out is a false statement, and it sent the
+         reader looking in the wrong place. */
+      let why;
+      if(res && res.noTransport){
+        why = 'could not be reached from the browser: it blocks cross-origin requests and no proxy could fetch it either';
+      } else if(res && res.rootsFound && (res.childFailures || []).length){
+        why = 'published a sitemap, but ' + res.childFailures.length + ' of its child sitemaps timed out even on retry. ' +
+              'The sitemap exists; the proxy could not fetch it in time. Try again, or paste URLs into the manual list';
+      } else if(res && res.rootsFound){
+        why = 'published a sitemap, but no URLs could be read from it. It may be empty, gzipped, or in a format this cannot parse';
+      } else {
+        why = 'published no sitemap at robots.txt or any of the 22 common paths';
+      }
       logLine(log, '  ' + hostLabel(origin) + ' ' + why, 'bad');
       notes.push('<b>' + esc(hostLabel(origin)) + '</b> ' + esc(why));
       continue;
+    }
+    if(res && (res.childFailures || []).length){
+      /* Partial success is still success, but the reader needs to know the
+         sample was drawn from an incomplete inventory. */
+      notes.push('<b>' + esc(hostLabel(origin)) + '</b> ' + res.childFailures.length +
+        ' child sitemap' + (res.childFailures.length > 1 ? 's' : '') +
+        ' could not be fetched, so this inventory is incomplete. Sampling proceeded on the ' +
+        items.length + ' URLs that were readable.');
     }
     logLine(log, '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
       (manual.length ? ' (including ' + manual.length + ' manual)' : ''), 'ok');
