@@ -105,6 +105,50 @@ stat tiles cannot tell them apart.
 | Excel | The same SVGs rasterised to PNG through canvas and embedded on a Charts tab, with the legend drawn inside the SVG since an HTML legend does not survive rasterisation |
 | Google Sheets | Native `addChart` columns anchored to a Chart data tab. **Sheets has no radar chart type**, so the profile is grouped columns there; the radar form appears in the app and the PDF |
 
+## Platform-aware fixes
+
+A finding says *what* is wrong. What a client can act on is *where the switch is on their
+platform*. "Serve WebP" and "turn on Compress images under Site settings, Publishing"
+are the same finding and very different instructions.
+
+### Why not BuiltWith
+
+BuiltWith was the obvious candidate and is the wrong tool here. It starts at **$295 a
+month**, authenticates with a static UUID key that cannot safely sit in a browser, and
+does not document CORS, so a front-end-only app would need a server in front of it. The
+same answer is available for nothing:
+
+1. **Lighthouse stack packs.** Every PSI response already carries `stackPacks`: detected
+   platforms with per-audit advice keyed by audit id. It was being discarded, the same
+   way the opportunity audits were.
+2. **Homepage fingerprinting.** The site's own markup, fetched through the transport
+   already negotiated for the sitemap, identifies 20 platforms, the image CDN in front of
+   them, and on WordPress the **installed plugin and theme slugs**, which is the
+   plugin-level detail BuiltWith is otherwise sold for.
+
+Lighthouse has no stack pack for Webflow, Framer, Duda or Squarespace, which is exactly
+where a consultant most needs the answer, so those are covered by the curated playbook.
+
+### The playbook
+
+Platform by audit id, giving the specific setting rather than the general principle.
+Covers Webflow, WordPress, Shopify, Squarespace, Wix, Next.js, Nuxt, Drupal, Ghost,
+Framer, Duda, Magento, BigCommerce and HubSpot.
+
+Resolution order per finding, per site: the curated entry first, then Lighthouse's own
+stack pack, then nothing. It never invents advice for a platform it does not have an
+entry for, and Lighthouse-sourced text is labelled as such.
+
+Plugin slugs that change the answer get their own note. If ShortPixel is already
+installed, the image finding is a bulk-optimise run in a plugin they own, not a
+purchasing decision.
+
+### Where it surfaces
+
+A Stack table and per-finding routing in the app, a Stack section and an "On this stack"
+block on every recommendation card in the document, an "On this stack" column on the
+Opportunities tab and a Stack tab in both workbooks.
+
 ## The deterministic report
 
 The workbook is the data. The **Report** button produces the document you hand a

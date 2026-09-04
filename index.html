@@ -696,6 +696,304 @@ async function discover(origin, opts, log){
 }
 function shortSm(u){ try{ return new URL(u).pathname; }catch(e){ return u; } }
 
+/* ------------------------------------------------------- platform detection */
+/* BuiltWith starts at $295 a month, authenticates with a static key that cannot
+   safely live in a browser, and does not document CORS. So the stack is detected
+   from the homepage HTML we can already fetch through the same transport the
+   sitemap uses, and enriched with Lighthouse's own stack packs, which PSI
+   returns on every call at no extra cost. */
+
+const PLATFORMS = [
+  { id:'webflow',     label:'Webflow',      test: h => /data-wf-(site|page)=|assets(-global)?\.website-files\.com|cdn\.prod\.website-files\.com/i.test(h) },
+  { id:'shopify',     label:'Shopify',      test: h => /cdn\.shopify\.com|Shopify\.theme|myshopify\.com/i.test(h) },
+  { id:'squarespace', label:'Squarespace',  test: h => /static1\.squarespace\.com|squarespace-headers|SQUARESPACE_CONTEXT/i.test(h) },
+  { id:'wix',         label:'Wix',          test: h => /_wixCssImports|static\.parastorage\.com|wix-warmup-data/i.test(h) },
+  { id:'framer',      label:'Framer',       test: h => /framerusercontent\.com|__framer/i.test(h) },
+  { id:'duda',        label:'Duda',         test: h => /irp(-cdn)?\.cdn-website\.com|dudaone/i.test(h) },
+  { id:'hubspot',     label:'HubSpot CMS',  test: h => /hs-scripts\.com|hubspotusercontent|hs-analytics/i.test(h) },
+  { id:'bigcommerce', label:'BigCommerce',  test: h => /cdn\d*\.bigcommerce\.com|bigcommerce\.com\/s-/i.test(h) },
+  { id:'magento',     label:'Magento',      test: h => /Magento_|\/static\/version\d+\/frontend\//i.test(h) },
+  { id:'drupal',      label:'Drupal',       test: h => /Drupal\.settings|drupal-settings-json|content=["']Drupal/i.test(h) },
+  { id:'ghost',       label:'Ghost',        test: h => /content=["']Ghost\s|\/ghost\/api\//i.test(h) },
+  { id:'craft',       label:'Craft CMS',    test: h => /craftcms|\/cpresources\//i.test(h) },
+  { id:'woocommerce', label:'WooCommerce',  test: h => /woocommerce|wc-block/i.test(h) },
+  { id:'wordpress',   label:'WordPress',    test: h => /\/wp-content\/|\/wp-includes\/|wp-json|content=["']WordPress/i.test(h) },
+  { id:'nextjs',      label:'Next.js',      test: h => /__NEXT_DATA__|\/_next\/static\//i.test(h) },
+  { id:'nuxt',        label:'Nuxt',         test: h => /__NUXT__|\/_nuxt\//i.test(h) },
+  { id:'gatsby',      label:'Gatsby',       test: h => /___gatsby|\/page-data\//i.test(h) },
+  { id:'astro',       label:'Astro',        test: h => /astro-island|data-astro-/i.test(h) },
+  { id:'sveltekit',   label:'SvelteKit',    test: h => /__sveltekit_|\/_app\/immutable\//i.test(h) },
+  { id:'react',       label:'React',        test: h => /data-reactroot|__REACT_DEVTOOLS/i.test(h) }
+];
+/* Ordered most specific first: a WooCommerce site is also WordPress, and a Next.js
+   site is also React. The first match wins as the primary and the rest are kept
+   as secondary, which is how a stack actually reads. */
+
+const IMAGE_CDNS = [
+  { id:'cloudinary', label:'Cloudinary', test: h => /res\.cloudinary\.com/i.test(h) },
+  { id:'imgix',      label:'imgix',      test: h => /\.imgix\.net/i.test(h) },
+  { id:'cloudflare-images', label:'Cloudflare Images', test: h => /\/cdn-cgi\/image\//i.test(h) },
+  { id:'shopify-cdn', label:'Shopify CDN', test: h => /cdn\.shopify\.com\/s\/files/i.test(h) },
+  { id:'wordpress-jetpack', label:'Jetpack Photon', test: h => /i\d\.wp\.com/i.test(h) },
+  { id:'nextjs-image', label:'Next.js image optimiser', test: h => /\/_next\/image\?/i.test(h) },
+  { id:'akamai',     label:'Akamai Image Manager', test: h => /akamaized\.net/i.test(h) },
+  { id:'fastly',     label:'Fastly', test: h => /fastly\.net|fastlylb\.net/i.test(h) }
+];
+
+/* WordPress leaks its plugin list in asset paths, which is the plugin-level
+   detail BuiltWith would otherwise be sold for. */
+function detectWpPlugins(html){
+  const found = new Set();
+  const re = /\/wp-content\/plugins\/([a-z0-9][a-z0-9._-]{1,60})\//gi;
+  let m;
+  while((m = re.exec(html)) !== null) found.add(m[1].toLowerCase());
+  const themes = new Set();
+  const tre = /\/wp-content\/themes\/([a-z0-9][a-z0-9._-]{1,60})\//gi;
+  while((m = tre.exec(html)) !== null) themes.add(m[1].toLowerCase());
+  return { plugins: Array.from(found).sort(), themes: Array.from(themes).sort() };
+}
+
+async function detectStack(origin, log){
+  const out = { origin, primary: null, also: [], plugins: [], themes: [], imageCdns: [], generator: null, ok: false };
+  let html = '';
+  try{
+    const r = await fetchText(origin + '/', { timeout: 20000 });
+    html = r.text || '';
+  }catch(e){
+    if(log) logLine(log, '  stack detection unavailable (' + e.message + ')', 'dim');
+    return out;
+  }
+  if(!html) return out;
+  out.ok = true;
+  const head = html.slice(0, 400000);   // fingerprints live near the top
+  const gen = head.match(/<meta[^>]+name=["']generator["'][^>]+content=["']([^"']{1,120})["']/i);
+  if(gen) out.generator = gen[1].trim();
+  const hits = PLATFORMS.filter(p => { try{ return p.test(head); }catch(e){ return false; } });
+  if(hits.length){ out.primary = hits[0]; out.also = hits.slice(1, 5); }
+  out.imageCdns = IMAGE_CDNS.filter(c => { try{ return c.test(head); }catch(e){ return false; } });
+  if(hits.some(h => h.id === 'wordpress' || h.id === 'woocommerce')){
+    const wp = detectWpPlugins(head);
+    out.plugins = wp.plugins.slice(0, 40);
+    out.themes = wp.themes.slice(0, 5);
+  }
+  if(log){
+    logLine(log, '  stack: ' + (out.primary ? out.primary.label : 'not identified') +
+      (out.also.length ? ' (also ' + out.also.map(a => a.label).join(', ') + ')' : '') +
+      (out.plugins.length ? ', ' + out.plugins.length + ' WordPress plugins' : '') +
+      (out.imageCdns.length ? ', images via ' + out.imageCdns.map(c => c.label).join(' and ') : ''), 'ok');
+  }
+  return out;
+}
+
+/* Lighthouse ships its own per-platform advice keyed by audit id. It costs
+   nothing extra because it is already in every response. */
+function extractStackPacks(lr){
+  const sp = lr.stackPacks;
+  if(!Array.isArray(sp) || !sp.length) return [];
+  return sp.map(p => ({
+    id: p.id, title: p.title,
+    descriptions: p.descriptions && typeof p.descriptions === 'object' ? p.descriptions : {}
+  }));
+}
+
+
+/* Lighthouse returns its stack packs per measurement; they are identical across
+   pages of the same site, so the first one that carries any is enough. */
+function packsForSite(rows, origin){
+  const r = rows.find(x => x.site === origin && x.data && x.data.stackPacks && x.data.stackPacks.length);
+  return r ? r.data.stackPacks : [];
+}
+function stackForSite(origin){
+  const s = state.sites.find(x => x.origin === origin);
+  return s ? s.stack : null;
+}
+function anyStackKnown(){
+  return state.sites.some(s => s.stack && (s.stack.primary || (s.stack.plugins || []).length));
+}
+
+
+/* The fingerprint and the Lighthouse pack often name the same platform, so the
+   secondary list is deduped case-insensitively against itself and the primary. */
+function alsoDetected(stack, packs){
+  const seen = new Set();
+  const primary = stack && stack.primary ? stack.primary.label.toLowerCase() : null;
+  if(primary) seen.add(primary);
+  const out = [];
+  const push = name => {
+    if(!name) return;
+    const k = String(name).toLowerCase();
+    if(seen.has(k)) return;
+    seen.add(k); out.push(name);
+  };
+  (stack && stack.also || []).forEach(a => push(a.label));
+  (packs || []).forEach(pk => push(pk.title));
+  return out;
+}
+
+/* ------------------------------------------------------- platform playbook */
+/* Keyed platform -> audit id -> the specific setting that fixes it on that
+   platform. Lighthouse's own stack packs cover some of this generically; these
+   entries exist where the generic text is not actionable, or where Lighthouse
+   has no pack at all. Webflow, Framer, Duda and Squarespace have no Lighthouse
+   stack pack, which is exactly where a consultant needs the answer most. */
+const PLAYBOOK = {
+  webflow: {
+    'modern-image-formats': 'Webflow serves WebP automatically for images uploaded to the Assets panel, but not for images baked into a background style or served from an external URL. Re-upload the offenders as Assets and reference them from the element rather than from custom CSS.',
+    'uses-optimized-images': 'Use Site settings, then Publishing, and run Compress images on the whole site. It is destructive to the stored original, so keep a copy outside Webflow first.',
+    'uses-responsive-images': 'Webflow emits srcset automatically for Assets-panel images placed in an Image element. Background images and images set through custom code do not get it, so convert those to Image elements.',
+    'prioritize-lcp-image': 'Select the hero image, open Settings, and set Loading to Eager. Webflow defaults every image to lazy, which is the single most common cause of a slow LCP on the platform.',
+    'lcp-lazy-loaded': 'Select the hero image and switch Loading from Lazy to Eager in the element settings panel.',
+    'render-blocking-resources': 'Move anything in Site settings, Custom code, Head that is not needed for first paint into Before body tag instead.',
+    'unused-javascript': 'Webflow ships jQuery on every page for interactions. If a page has no Webflow interactions, disable jQuery for the site under Site settings, Advanced. Audit third-party embeds separately.',
+    'uses-text-compression': 'Webflow hosting compresses by default. Seeing this usually means assets are served from a custom domain or reverse proxy in front of Webflow; fix it there.',
+    'font-display': 'Upload fonts under Site settings, Fonts rather than linking them in custom code; Webflow applies font-display for uploaded faces.',
+    'third-party-summary': 'Audit Site settings, Custom code and any embed components. Webflow has no tag manager of its own, so third-party scripts accumulate there unreviewed.'
+  },
+  wordpress: {
+    'modern-image-formats': 'WordPress 6.x can serve WebP on upload, but only for new uploads. Existing media needs a bulk conversion: a plugin already installed on this site may do it, otherwise regenerate the library.',
+    'uses-optimized-images': 'Run a bulk optimisation over the existing media library, then set the plugin to compress on upload so the problem does not return.',
+    'uses-responsive-images': 'WordPress emits srcset for images inserted through the editor. Images hard-coded into a theme template or a page builder often bypass it, so check the template.',
+    'unused-javascript': 'Page builders and plugins enqueue scripts globally by default. Use a plugin that dequeues assets per page, or dequeue in the theme with wp_dequeue_script on the pages that do not need them.',
+    'unused-css-rules': 'Same cause as the JavaScript: global enqueues. Generate critical CSS and defer the rest, or dequeue per template.',
+    'render-blocking-resources': 'Defer non-critical CSS and JS. If a caching plugin is installed it almost certainly has this switch already.',
+    'server-response-time': 'Enable full-page caching and object caching. On shared hosting this is usually the entire finding; no amount of front-end work will move TTFB without it.',
+    'uses-long-cache-ttl': 'Set far-future expiry headers for static assets at the server or CDN. Most caching plugins expose this directly.',
+    'uses-text-compression': 'Enable brotli or gzip at the host. Most caching plugins will write the rule for you.',
+    'third-party-summary': 'Audit the plugin list: each one that adds a tracker adds main-thread work on every page, including pages that do not use the plugin.'
+  },
+  shopify: {
+    'modern-image-formats': 'Shopify\'s CDN serves WebP automatically when the browser supports it. Seeing this finding usually means images are referenced from a hard-coded URL or an app rather than through the image_url filter, so route them through the theme filter.',
+    'uses-responsive-images': 'Use the image_url filter with width parameters and let Liquid emit srcset, rather than a fixed src in the theme.',
+    'unused-javascript': 'Apps inject scripts site-wide through Script Tags. Remove apps you no longer use; uninstalling does not always remove the script tag, so check the theme for leftovers.',
+    'render-blocking-resources': 'Check theme.liquid for app embeds and third-party snippets sitting in the head. Most can move to the end of body.',
+    'prioritize-lcp-image': 'Add loading="eager" and fetchpriority="high" to the hero image in the section template; Shopify themes lazy-load by default.',
+    'third-party-summary': 'The app list is the finding. Each app is main-thread work on every page view, and the cost is rarely proportional to the value.',
+    'server-response-time': 'Shopify controls the origin, so this is usually theme-side: a section making many Liquid loops or a metafield-heavy template. Profile with the theme inspector.'
+  },
+  squarespace: {
+    'modern-image-formats': 'Squarespace serves its own responsive formats for images uploaded to a block. Images set through Custom CSS as backgrounds bypass that, so move them into image blocks.',
+    'unused-javascript': 'Squarespace loads its site bundle on every page. The controllable part is Code Injection and any third-party block, so audit those.',
+    'render-blocking-resources': 'Move anything in Settings, Advanced, Code Injection out of the header where it is not needed for first paint.',
+    'third-party-summary': 'Code Injection is where these accumulate. Squarespace itself will not remove them.',
+    'font-display': 'Custom fonts added through Code Injection do not get font-display. Use the built-in font picker where possible.'
+  },
+  wix: {
+    'modern-image-formats': 'Wix serves WebP through its media manager automatically. If this fires, images are likely embedded from an external URL rather than uploaded.',
+    'unused-javascript': 'Wix ships a large platform bundle that is not under your control. Focus on removing installed apps, which are.',
+    'third-party-summary': 'The App Market installations are the controllable part; each one adds main-thread work on every page.',
+    'server-response-time': 'Wix controls the origin. If TTFB is high, raise it with Wix support; there is no site-side fix.'
+  },
+  nextjs: {
+    'modern-image-formats': 'Use next/image, which negotiates AVIF and WebP automatically. Any plain img tag bypasses it.',
+    'uses-responsive-images': 'next/image emits srcset from the sizes prop. A missing or wrong sizes prop is the usual cause of this finding.',
+    'prioritize-lcp-image': 'Add the priority prop to the LCP image; it sets fetchpriority high and disables lazy loading.',
+    'lcp-lazy-loaded': 'next/image lazy-loads by default. Add priority to the hero image.',
+    'unused-javascript': 'Check the bundle analyser. A client component importing a heavy library is the usual cause; move it to a server component or dynamic import it.',
+    'server-response-time': 'If pages are server-rendered per request, move to static generation or add revalidation. Check for a slow data fetch in the server component tree.',
+    'render-blocking-resources': 'Use next/script with the afterInteractive or lazyOnload strategy for anything not needed for first paint.'
+  },
+  nuxt: {
+    'modern-image-formats': 'Use the Nuxt Image module, which handles format negotiation; plain img tags bypass it.',
+    'unused-javascript': 'Check for components imported globally that only a few routes use, and lazy-load them with the Lazy prefix.',
+    'prioritize-lcp-image': 'Set preload on the hero NuxtImg and remove any lazy loading from it.'
+  },
+  drupal: {
+    'modern-image-formats': 'Add a WebP image style and set it on the responsive image style used by the affected field.',
+    'uses-responsive-images': 'Use the Responsive Image module and map breakpoints to image styles for the field rendering the hero.',
+    'unused-javascript': 'Aggregate JS under Performance settings and audit contributed modules attaching libraries globally rather than per route.',
+    'server-response-time': 'Enable the internal page cache and dynamic page cache, and put a reverse proxy in front. Uncached Views are the usual cause.'
+  },
+  ghost: {
+    'modern-image-formats': 'Ghost serves responsive sizes for images in content. Theme-level images referenced directly bypass that, so route them through the img_url helper.',
+    'render-blocking-resources': 'Check Code injection for scripts in the site header.'
+  },
+  framer: {
+    'modern-image-formats': 'Framer converts uploaded images automatically. Images referenced from an external URL are not converted, so upload them into the project.',
+    'unused-javascript': 'Framer ships its runtime on every page. The controllable part is embedded code components and third-party embeds.',
+    'third-party-summary': 'Audit any embed layers added to the canvas.'
+  },
+  duda: {
+    'modern-image-formats': 'Duda serves WebP through its CDN for images added via the editor. External URLs bypass it.',
+    'render-blocking-resources': 'Move site-wide header code into the footer injection point where it is not needed for first paint.'
+  },
+  magento: {
+    'modern-image-formats': 'Configure a WebP-capable image adapter or put an image CDN in front; core Magento does not convert on its own.',
+    'unused-javascript': 'Enable JS bundling and minification in production mode, and audit third-party modules adding RequireJS dependencies globally.',
+    'server-response-time': 'Full-page cache with Varnish is effectively mandatory. Without it this finding will dominate every other one.'
+  },
+  bigcommerce: {
+    'modern-image-formats': 'BigCommerce serves WebP through its CDN for images in the product catalogue. Theme images referenced directly do not get it.',
+    'unused-javascript': 'Audit installed apps; each injects scripts store-wide.'
+  },
+  hubspot: {
+    'modern-image-formats': 'Enable automatic image optimisation in the file manager settings, and upload images there rather than linking them externally.',
+    'render-blocking-resources': 'Move non-critical scripts out of the site header template in Design Manager.',
+    'third-party-summary': 'The HubSpot tracking script is heavy by design. Audit any additional integrations layered on top.'
+  }
+};
+
+/* Some plugin slugs are worth naming directly, because the fix is a setting
+   inside a plugin the site already has rather than a new install. */
+const PLUGIN_NOTES = {
+  'wp-rocket': 'WP Rocket is installed. File optimisation, media lazy-load and preload settings live in its dashboard, so most of these findings are switches you already own.',
+  'w3-total-cache': 'W3 Total Cache is installed. Browser cache, minify and CDN settings are all in its panel.',
+  'wp-super-cache': 'WP Super Cache is installed; it handles page caching but not asset optimisation, so pair it with something that does.',
+  'litespeed-cache': 'LiteSpeed Cache is installed and can do image conversion, critical CSS and caching in one place. Check its Image Optimization tab before adding another plugin.',
+  'autoptimize': 'Autoptimize is installed. CSS and JS aggregation and critical CSS are in its settings.',
+  'ewww-image-optimizer': 'EWWW Image Optimizer is installed. Its bulk optimise and WebP conversion settings address the image findings directly.',
+  'shortpixel-image-optimiser': 'ShortPixel is installed; run a bulk optimisation and enable WebP or AVIF delivery.',
+  'imagify': 'Imagify is installed; run bulk optimisation and turn on WebP.',
+  'wp-smushit': 'Smush is installed. Enable bulk smush and WebP conversion.',
+  'optimole-wp': 'Optimole is installed and already proxies images; check that its lazy-load exclusion covers the hero image.',
+  'elementor': 'Elementor is in use. It enqueues its own CSS and JS broadly; enable its improved asset loading and optimized DOM output experiments.',
+  'wpbakery-page-builder': 'WPBakery is in use, which typically loads all element assets globally regardless of what a page uses.',
+  'js_composer': 'WPBakery is in use, which typically loads all element assets globally regardless of what a page uses.',
+  'woocommerce': 'WooCommerce loads cart fragments and its own scripts on every page, including pages with no commerce on them. Restrict them to commerce templates.',
+  'contact-form-7': 'Contact Form 7 enqueues its CSS and JS on every page by default. Restrict it to pages with a form.',
+  'jetpack': 'Jetpack is installed; its Site Accelerator can serve images from a CDN, but check it is not conflicting with another image plugin.',
+  'perfmatters': 'Perfmatters is installed. Its script manager can dequeue per page, which addresses the unused JavaScript and CSS findings directly.',
+  'wp-fastest-cache': 'WP Fastest Cache is installed; minification and browser caching are in its settings.'
+};
+
+/* Resolve the platform advice for one audit on one site, preferring the curated
+   entry, then Lighthouse's own stack pack, then nothing. Never invents advice. */
+function platformAdvice(auditId, stack, packs){
+  const out = [];
+  const ids = [];
+  if(stack && stack.primary) ids.push(stack.primary.id);
+  (stack && stack.also ? stack.also : []).forEach(a => ids.push(a.id));
+  for(const id of ids){
+    const entry = PLAYBOOK[id] && PLAYBOOK[id][auditId];
+    if(entry){ out.push({ source: labelForPlatform(id, stack), text: entry, curated: true }); break; }
+  }
+  for(const p of (packs || [])){
+    const d = p.descriptions && p.descriptions[auditId];
+    if(d && !out.some(o => o.source === p.title)){
+      out.push({ source: p.title, text: stripMd(d), curated: false });
+    }
+  }
+  return out;
+}
+function labelForPlatform(id, stack){
+  if(stack && stack.primary && stack.primary.id === id) return stack.primary.label;
+  const a = (stack && stack.also || []).find(x => x.id === id);
+  return a ? a.label : id;
+}
+/* Lighthouse advice arrives as markdown with links; flatten it for plain-text
+   surfaces without dropping the destination. */
+function stripMd(s){
+  return String(s)
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function pluginNotesFor(stack){
+  if(!stack || !stack.plugins || !stack.plugins.length) return [];
+  return stack.plugins.filter(p => PLUGIN_NOTES[p]).map(p => ({ slug: p, text: PLUGIN_NOTES[p] }));
+}
+
 /* ------------------------------------------------- normalise, group, sample */
 function normalise(list, origin){
   const originHost = new URL(origin).host.replace(/^www\./,'');
@@ -1310,6 +1608,7 @@ function extractRun(json){
     fieldOverall: le.overall_category || null,
     opps: extractOpportunities(lr),
     diag: extractDiagnostics(lr),
+    stackPacks: extractStackPacks(lr),
     finalUrl: lr.finalDisplayedUrl || lr.finalUrl || json.id || null,
     fetchedAt: lr.fetchTime || null,
     lhVersion: lr.lighthouseVersion || null
@@ -1652,6 +1951,7 @@ function renderResults(){
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
     box.appendChild(chartsSection(okRows));
+    box.appendChild(stackSection(okRows));
     box.appendChild(opportunitySection(okRows));
     box.appendChild(collectionTable(okRows));
     box.appendChild(urlTable(okRows));
@@ -1989,6 +2289,75 @@ function chartCard(title, svg, legend, cls){
   return c;
 }
 
+
+/* What each site is built on, and the plugin-level detail that changes the fix. */
+function stackSection(rows){
+  const wrap = el('div');
+  if(!anyStackKnown()) return wrap;
+  const h = el('h3','', 'Stack');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Detected from each site\'s own homepage markup, plus the technology packs Lighthouse returns with every measurement. This is what turns a generic finding into a specific instruction.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Site</th><th>Platform</th><th>Also detected</th><th>Images</th><th>Plugins and themes</th></tr></thead><tbody>';
+  for(const site of state.sites){
+    if(!rows.some(r => r.site === site.origin)) continue;
+    const st = site.stack;
+    const packs = packsForSite(rows, site.origin);
+    const packNames = alsoDetected(st, packs);
+    html += '<tr' + (multi() && site.primary ? ' class="primary"' : '') + '>' +
+      '<td><b>' + esc(site.label) + '</b>' + (multi() && site.primary ? '<span class="tag key">yours</span>' : '') + '</td>' +
+      '<td>' + (st && st.primary ? '<b>' + esc(st.primary.label) + '</b>' : '<span style="color:var(--muted)">not identified</span>') +
+        (st && st.generator ? '<div style="font-size:11px;color:var(--muted)">' + esc(st.generator) + '</div>' : '') + '</td>' +
+      '<td>' + (packNames.length ? packNames.map(esc).join(', ') : '<span style="color:var(--muted)">–</span>') + '</td>' +
+      '<td>' + (st && st.imageCdns.length ? st.imageCdns.map(c => esc(c.label)).join(', ') : '<span style="color:var(--muted)">no CDN detected</span>') + '</td>' +
+      '<td>' + (st && st.plugins.length
+        ? '<span class="tag">' + st.plugins.length + '</span> ' +
+          '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px">' +
+          st.plugins.slice(0, 8).map(esc).join(', ') + (st.plugins.length > 8 ? ' and ' + (st.plugins.length - 8) + ' more' : '') + '</span>'
+        : '<span style="color:var(--muted)">–</span>') + '</td></tr>';
+  }
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  wrap.appendChild(tw);
+
+  const notes = [];
+  for(const site of state.sites){
+    pluginNotesFor(site.stack).forEach(n => notes.push({ site: site.label, ...n }));
+  }
+  if(notes.length){
+    const d = el('div','note');
+    d.innerHTML = '<b>Plugins that change the recommendation</b><br>' +
+      notes.slice(0, 8).map(n => '<div style="margin-top:5px">' +
+        (multi() ? '<b>' + esc(n.site) + '</b> · ' : '') +
+        '<span class="mono" style="font-size:11px">' + esc(n.slug) + '</span> ' + esc(n.text) + '</div>').join('');
+    wrap.appendChild(d);
+  }
+  return wrap;
+}
+
+/* The platform-specific block that hangs off a finding. */
+function adviceBlockHTML(auditId, rows){
+  const blocks = [];
+  for(const site of state.sites){
+    if(!rows.some(r => r.site === site.origin)) continue;
+    const adv = platformAdvice(auditId, site.stack, packsForSite(rows, site.origin));
+    if(!adv.length) continue;
+    blocks.push({ site: site.label, adv });
+  }
+  if(!blocks.length) return '';
+  return '<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--grid)">' +
+    '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:6px">On this stack</div>' +
+    blocks.map(b => b.adv.map(a =>
+      '<div style="margin-bottom:6px;font-size:12.5px">' +
+      '<span class="tag">' + esc(multi() ? b.site + ' · ' + a.source : a.source) + '</span> ' +
+      esc(a.text) + (a.curated ? '' : ' <span style="color:var(--muted);font-size:11px">(Lighthouse)</span>') + '</div>').join('')).join('') +
+    '</div>';
+}
+
 /* Opportunities: what to actually fix, rolled up across the sample. */
 function opportunitySection(rows){
   const wrap = el('div');
@@ -2009,22 +2378,26 @@ function opportunitySection(rows){
   let html = '<table><thead><tr><th>Finding</th><th class="n">Pages hit</th>' +
     '<th class="n">Time a page</th><th class="n">Bytes a page</th><th>What to do</th></tr></thead><tbody>';
   opps.forEach((o, i) => {
-    html += '<tr data-opp="' + i + '"' + (o.resources.length ? ' style="cursor:pointer"' : '') + '>' +
-      '<td><b>' + esc(o.label) + '</b>' + (o.resources.length ? ' <span class="tag">' + o.resources.length + ' files</span>' : '') + '</td>' +
+    const hasAdvice = !!adviceBlockHTML(o.id, rows);
+    const expandable = o.resources.length || hasAdvice;
+    html += '<tr data-opp="' + i + '"' + (expandable ? ' style="cursor:pointer"' : '') + '>' +
+      '<td><b>' + esc(o.label) + '</b>' + (o.resources.length ? ' <span class="tag">' + o.resources.length + ' files</span>' : '') +
+        (hasAdvice ? ' <span class="tag key">stack fix</span>' : '') + '</td>' +
       '<td class="n">' + o.pages + ' of ' + rows.length + '</td>' +
       '<td class="n">' + (o.avgMs ? esc(fmtMs(o.avgMs)) : '<span style="color:var(--muted)">not timed</span>') + '</td>' +
       '<td class="n">' + (o.avgBytes ? esc(fmtBytes(o.avgBytes)) : '<span style="color:var(--muted)">n/a</span>') + '</td>' +
       '<td style="max-width:340px">' + esc(o.fix) + '</td></tr>';
-    if(o.resources.length){
+    if(expandable){
       html += '<tr class="oppdetail hidden" data-for="' + i + '"><td colspan="5" style="padding:0">' +
         '<div style="padding:10px 12px 12px;background:var(--plane)">' +
-        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:7px">Files responsible</div>' +
-        '<table style="min-width:0"><thead><tr><th>Resource</th><th class="n">Pages</th><th class="n">Size</th><th class="n">Cost a page</th></tr></thead><tbody>' +
+        adviceBlockHTML(o.id, rows).replace('margin-top:10px;padding-top:9px;border-top:1px solid var(--grid)', 'margin:0 0 12px') +
+        (o.resources.length ? '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:7px">Files responsible</div>' : '') +
+        (o.resources.length ? '<table style="min-width:0"><thead><tr><th>Resource</th><th class="n">Pages</th><th class="n">Size</th><th class="n">Cost a page</th></tr></thead><tbody>' +
         o.resources.slice(0, 15).map(r =>
           '<tr><td class="urlcell" title="' + esc(r.url) + '" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px">' + esc(r.url) + '</td>' +
           '<td class="n">' + r.pages + '</td><td class="n">' + esc(fmtBytes(r.bytes)) + '</td><td class="n">' + esc(fmtMs(r.ms)) + '</td></tr>').join('') +
         '</tbody></table>' +
-        (o.resources.length > 15 ? '<div class="hint" style="margin-top:6px">' + (o.resources.length - 15) + ' more in the export.</div>' : '') +
+        (o.resources.length > 15 ? '<div class="hint" style="margin-top:6px">' + (o.resources.length - 15) + ' more in the export.</div>' : '') : '') +
         '</div></td></tr>';
     }
   });
@@ -2527,7 +2900,7 @@ function ctx(rows, sites){
 
 const RULES = [
   {
-    id: 'ttfb-origin',
+    id: 'ttfb-origin', audit: 'server-response-time',
     when: c => c.ttfb > 800,
     severity: c => c.ttfb > 1800 ? 'critical' : 'serious',
     risk: 'medium', effort: 'medium',
@@ -2546,7 +2919,7 @@ const RULES = [
     ]
   },
   {
-    id: 'lcp-image-unoptimised',
+    id: 'lcp-image-unoptimised', audit: 'modern-image-formats',
     when: c => {
       const img = c.lcpEls.find(e => /img|image|picture|hero|banner/i.test(e.label + ' ' + e.selector + ' ' + e.snippet));
       return !!img && !!(c.opp('modern-image-formats') || c.opp('uses-responsive-images') || c.opp('uses-optimized-images'));
@@ -2582,7 +2955,7 @@ const RULES = [
     ]
   },
   {
-    id: 'lcp-lazy',
+    id: 'lcp-lazy', audit: 'lcp-lazy-loaded',
     when: c => !!c.opp('lcp-lazy-loaded'),
     severity: () => 'critical', risk: 'low', effort: 'low',
     title: c => 'The LCP image is lazy-loaded on ' + c.opp('lcp-lazy-loaded').pages + ' pages',
@@ -2594,7 +2967,7 @@ const RULES = [
                 'If a CMS applies it globally, exclude the hero or featured-image field.']
   },
   {
-    id: 'render-blocking',
+    id: 'render-blocking', audit: 'render-blocking-resources',
     when: c => { const o = c.opp('render-blocking-resources'); return o && o.avgMs > 250; },
     severity: c => c.opp('render-blocking-resources').avgMs > 600 ? 'serious' : 'moderate',
     risk: 'medium', effort: 'medium',
@@ -2613,7 +2986,7 @@ const RULES = [
                 'Move tag manager and analytics snippets out of the critical path.']
   },
   {
-    id: 'unused-js',
+    id: 'unused-js', audit: 'unused-javascript',
     when: c => { const o = c.opp('unused-javascript'); return o && o.avgBytes > 150000; },
     severity: c => c.opp('unused-javascript').avgBytes > 400000 ? 'serious' : 'moderate',
     risk: 'high', effort: 'high',
@@ -2632,7 +3005,7 @@ const RULES = [
                 'Treat this as sequenced work behind the image and origin fixes; it carries the highest regression risk of the findings here.']
   },
   {
-    id: 'third-party',
+    id: 'third-party', audit: 'third-party-summary',
     when: c => c.tp.length && c.tp.reduce((s, t) => s + t.avgMs, 0) > 250,
     severity: c => c.tp.reduce((s, t) => s + t.avgMs, 0) > 600 ? 'serious' : 'moderate',
     risk: 'medium', effort: 'low',
@@ -2647,7 +3020,7 @@ const RULES = [
                 'Re-measure after removal; this is usually the cheapest win on the list.']
   },
   {
-    id: 'text-compression',
+    id: 'text-compression', audit: 'uses-text-compression',
     when: c => !!c.opp('uses-text-compression'),
     severity: () => 'serious', risk: 'low', effort: 'low',
     title: c => 'Text assets are served uncompressed',
@@ -2739,7 +3112,7 @@ const RULES = [
                 'Treat the leading site as the target rather than the 90-point threshold; it proves the number is reachable in this sector.']
   },
   {
-    id: 'cache-ttl',
+    id: 'cache-ttl', audit: 'uses-long-cache-ttl',
     when: c => !!c.opp('uses-long-cache-ttl'),
     severity: () => 'minor', risk: 'low', effort: 'low',
     title: () => 'Static assets have short cache lifetimes',
@@ -2751,7 +3124,7 @@ const RULES = [
                 'Keep HTML on a short TTL; only the fingerprinted assets get the long one.']
   },
   {
-    id: 'font-display',
+    id: 'font-display', audit: 'font-display',
     when: c => !!c.opp('font-display'),
     severity: () => 'minor', risk: 'low', effort: 'low',
     title: () => 'Web fonts block text from rendering',
@@ -2774,11 +3147,19 @@ function runRules(rows, sites){
     let ok = false;
     try{ ok = !!rule.when(c); }catch(e){ ok = false; }
     if(!ok){ skipped.push({ id: rule.id }); return; }
+    const advice = [];
+    if(rule.audit){
+      for(const site of (c.sites || [])){
+        if(!c.rows.some(r => r.site === site.origin)) continue;
+        platformAdvice(rule.audit, site.stack, packsForSite(c.rows, site.origin))
+          .forEach(a => advice.push({ site: site.label, source: a.source, text: a.text, curated: a.curated }));
+      }
+    }
     fired.push({
-      id: rule.id, order: i,
+      id: rule.id, order: i, audit: rule.audit || null,
       severity: rule.severity(c), risk: rule.risk, effort: rule.effort,
       title: rule.title(c), thesis: rule.thesis(c),
-      evidence: rule.evidence(c), why: rule.why, fix: rule.fix(c)
+      evidence: rule.evidence(c), why: rule.why, fix: rule.fix(c), advice
     });
   });
   fired.sort((a, b) => (SEV_ORDER[a.severity] - SEV_ORDER[b.severity]) || (a.order - b.order));
@@ -2903,8 +3284,15 @@ function buildReportModel(){
     const rs = ok.filter(r => r.strategy === strat);
     if(!rs.length) continue;
     for(const o of aggregateOpportunities(rs)){
+      const adv = [];
+      for(const site of state.sites){
+        if(!rs.some(r => r.site === site.origin)) continue;
+        platformAdvice(o.id, site.stack, packsForSite(rs, site.origin))
+          .forEach(a => adv.push((state.sites.length > 1 ? site.label + ' / ' : '') + a.source + ': ' + a.text));
+      }
       oppRows.push([strat, o.label, o.pages, Math.round(o.avgMs) || null, Math.round(o.avgBytes) || null,
-                    Math.round(o.ms) || null, Math.round(o.bytes) || null, o.sites.join(', '), o.fix]);
+                    Math.round(o.ms) || null, Math.round(o.bytes) || null, o.sites.join(', '), o.fix,
+                    adv.join('  |  ') || null]);
       for(const r of o.resources){
         resRows.push([strat, o.label, r.url, r.pages, Math.round(r.bytes), Math.round(r.ms)]);
       }
@@ -2916,8 +3304,8 @@ function buildReportModel(){
   }
   if(oppRows.length){
     tab('Opportunities', { kind:'table',
-      headers:['Strategy','Finding','Pages hit','Wasted ms a page','Wasted bytes a page','Wasted ms across sample','Wasted bytes across sample','Sites','What to do'],
-      rows: oppRows, widths:[92,230,80,130,140,150,160,150,420],
+      headers:['Strategy','Finding','Pages hit','Wasted ms a page','Wasted bytes a page','Wasted ms across sample','Wasted bytes across sample','Sites','What to do','On this stack'],
+      rows: oppRows, widths:[92,230,80,130,140,150,160,150,420,520],
       note:'Lighthouse findings across every measurement. The per-page figures are what a fix actually returns; the across-sample totals are a breadth signal and are not time anyone can save at once. Ordered by total impact. The files responsible are on the next tab.' });
   }
   if(resRows.length){
@@ -2959,6 +3347,24 @@ function buildReportModel(){
         x.values[k] == null ? null : r0(x.values[k])))),
       widths:[150].concat(chartSites.map(() => 120)),
       note:'Each metric scored 0 to 100 against Google\'s thresholds, where 100 is at or better than good. This is the source range for the charts on this tab. Google Sheets has no radar chart type, so the profile is drawn as grouped columns; the radar form appears in the app and in the PDF report.' });
+  }
+
+  const stackRows = state.sites.filter(st => ok.some(r => r.site === st.origin)).map(st => {
+    const k = st.stack || {};
+    return [st.label + (st.primary ? ' (subject)' : ''),
+            k.primary ? k.primary.label : 'not identified',
+            k.generator || '',
+            alsoDetected(k, packsForSite(ok, st.origin)).join(', '),
+            (k.imageCdns || []).map(c => c.label).join(', '),
+            (k.themes || []).join(', '),
+            (k.plugins || []).length,
+            (k.plugins || []).join(', ')];
+  });
+  if(stackRows.length){
+    tab('Stack', { kind:'table',
+      headers:['Site','Platform','Generator tag','Also detected','Image delivery','Themes','Plugin count','Plugins'],
+      rows: stackRows, widths:[150,140,180,240,180,160,100,600], monoCols:[7],
+      note:'Detected from each site\'s own homepage markup, plus the technology packs Lighthouse returns with every measurement. Platform-specific routes for each finding are in the last column of the Opportunities tab.' });
   }
 
   const metricHeaders = SHEET_COLS.map(c => c.label);
@@ -3405,6 +3811,8 @@ const REPORT_CSS = [
 'color:var(--muted);margin:0 0 6px}',
 '.two .lbl:not(:first-child){margin-top:14px}',
 '.steps{margin:0;padding-left:17px}.steps li{margin-bottom:5px}',
+'.stackfix{font-size:9.5pt;margin:0 0 6px;padding-left:9px;border-left:2px solid var(--cream)}',
+'.stackfix b{color:var(--ink2)}.stackfix .src{color:var(--muted);font-size:8pt}',
 '.callout{background:var(--cream);border-left:3px solid var(--amber);padding:13px 16px;border-radius:3px;',
 'margin:16px 0 0;font-size:10.5pt}',
 '.muted{color:var(--muted);font-size:10pt}',
@@ -3522,6 +3930,25 @@ function renderReportHTML(m){
     '<h3>By collection</h3>' +
     tableHTML(['Collection','Pages','Mean score','Mean LCP'],
       m.c.collections.map(col => [col.name, String(col.pages), String(r0(col.perf)), fmtMs(col.lcp)])));
+
+  if(m.c.sites.some(st => st.stack && (st.stack.primary || (st.stack.plugins || []).length))){
+    sec('Stack', 'What each site is built on, because it changes what the fix actually is.',
+      '<p>Detected from each site\'s own homepage markup and from the technology packs Lighthouse returns with every measurement. Where a recommendation below has a platform-specific route, it is stated on the recommendation itself.</p>' +
+      tableHTML(['Site','Platform','Also detected','Image delivery','Plugins'],
+        m.c.sites.filter(st => m.c.rows.some(r => r.site === st.origin)).map(st => {
+          const k = st.stack || {};
+          return [st.label + (st.primary ? ' (subject)' : ''),
+                  k.primary ? k.primary.label : 'not identified',
+                  alsoDetected(k, packsForSite(m.c.rows, st.origin)).join(', ') || 'none',
+                  (k.imageCdns || []).map(c => c.label).join(', ') || 'no CDN detected',
+                  (k.plugins || []).length ? (k.plugins.length + ': ' + k.plugins.slice(0, 10).join(', ') + (k.plugins.length > 10 ? ' and more' : '')) : 'none detected'];
+        })) +
+      (function(){
+        const notes = [];
+        m.c.sites.forEach(st => pluginNotesFor(st.stack).forEach(n => notes.push([st.label + ' / ' + n.slug, n.text])));
+        return notes.length ? '<h3>Plugins that change the recommendation</h3>' + kvTable(notes.slice(0, 10)) : '';
+      })());
+  }
 
   sec('Findings', 'The headline position and the shape of the problem.',
     '<div class="thesis">' + E(m.thesis) + '</div>' +
@@ -3646,7 +4073,13 @@ function cardHTML(f, num, sevPill, plainPill){
       kvTable(f.evidence) + '</div>' +
     '<div><div class="lbl">Why it matters</div><p>' + esc(f.why) + '</p>' +
       '<div class="lbl">What to do</div><ol class="steps">' +
-      f.fix.map(s => '<li>' + esc(s) + '</li>').join('') + '</ol></div></div>' +
+      f.fix.map(s => '<li>' + esc(s) + '</li>').join('') + '</ol>' +
+      (f.advice && f.advice.length
+        ? '<div class="lbl">On this stack</div>' +
+          f.advice.slice(0, 4).map(a => '<p class="stackfix"><b>' + esc(a.site === a.source ? a.source : a.site + ', ' + a.source) +
+            '</b> ' + esc(a.text) + (a.curated ? '' : ' <span class="src">Lighthouse</span>') + '</p>').join('')
+        : '') +
+      '</div></div>' +
     '</article>';
 }
 function kvTable(rows){
@@ -4282,9 +4715,10 @@ async function discoverAll(origins){
     }
     logLine(log, '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
       (manual.length ? ' (including ' + manual.length + ' manual)' : ''), 'ok');
+    const stack = await detectStack(origin, log);
     sites.push({
       origin, label: hostLabel(origin), primary: sites.length === 0,
-      items, groups: [], sitemaps: res.sitemaps,
+      items, groups: [], sitemaps: res.sitemaps, stack,
       transport: transport ? transport.name : 'direct'
     });
   }
@@ -4334,8 +4768,9 @@ $('#manualOnlyBtn').addEventListener('click', () => {
   if(!items.length){ $('#setupErr').innerHTML = '<div class="err">The manual list is empty or contains no URLs on ' + esc(origin) + '.</div>'; return; }
   $('#setupErr').innerHTML = '';
   $('#discCard').classList.add('hidden');
-  state.sites = [{ origin, label: hostLabel(origin), primary: true, items, groups: [], sitemaps: [], transport: 'manual' }];
+  state.sites = [{ origin, label: hostLabel(origin), primary: true, items, groups: [], sitemaps: [], transport: 'manual', stack: null }];
   buildGroupsAndSample();
+  detectStack(origin, null).then(st => { state.sites[0].stack = st; renderResults(); });
   $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
 });
 
