@@ -7,40 +7,42 @@
 <meta name="description" content="The full pipeline a site goes through: transport negotiation, sitemap discovery, collection pairing, sampling, measurement, interpretation and delivery.">
 <link rel="stylesheet" href="_shared.css">
 <style>
+/* Only what is specific to this page; everything else is in _shared.css */
 .wrap{max-width:900px}
-h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);margin:40px 0 4px;font-weight:700}
-h3{font-size:17px;margin:26px 0 8px;letter-spacing:-.01em}
-.phase{border-left:2px solid var(--rule);padding:0 0 4px 20px;margin:0 0 8px}
-.phase h3{margin-top:20px}
+.phase{border-left:2px solid var(--rule);padding:2px 0 4px 22px;margin:0 0 10px}
+.phase h3{margin-top:22px}
 .phase h3 .n{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--teal);
-  margin-right:9px;vertical-align:2px}
-figure{margin:22px 0 8px}
+  margin-right:10px;vertical-align:2px;font-weight:600}
+figure{margin:30px 0 10px;background:var(--surface);border:1px solid var(--ring);
+  border-radius:14px;padding:22px 20px 16px;box-shadow:var(--shadow)}
 figure svg{display:block;width:100%;height:auto;max-width:100%}
-figcaption{font-size:12.5px;color:var(--muted);margin-top:10px;text-align:center}
-table{width:100%;border-collapse:collapse;font-size:13.5px;margin:12px 0 6px}
-th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
-  padding:7px 10px 7px 0;border-bottom:1px solid var(--rule);font-weight:600}
-td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-2)}
-td:first-child{white-space:nowrap;color:var(--ink);font-weight:600}
-td code,p code,li code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
-  background:var(--surface);padding:1px 5px;border-radius:4px;border:1px solid var(--ring)}
-.fail{background:var(--surface);border:1px solid var(--ring);border-left:3px solid #d03b3b;
-  border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px}
-.fail b{color:var(--ink)}
-.note{background:var(--surface);border:1px solid var(--ring);border-left:3px solid var(--teal);
-  border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px}
-ul{padding-left:20px;margin:8px 0 12px}
-li{margin-bottom:6px}
-.lead{font-size:16px;color:var(--ink-2);max-width:68ch;margin-bottom:6px}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:14px;text-align:center}
+.phase table{font-size:13px}
+.phase td:first-child{white-space:nowrap}
 </style>
 </head>
 <body>
+<header class="masthead">
+  <div class="inner">
+    <a class="brand" href="./"><span class="dot"></span>PageSpeed Sampler</a>
+    <nav>
+      <a href="./">The tool</a>
+      <a href="flow.html" aria-current="page">How it works</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+    </nav>
+  </div>
+</header>
 <div class="wrap">
+<div class="titleblock">
 <p class="eyebrow">PageSpeed Sampler</p>
 <h1>How it works</h1>
 <p class="lead">Every stage a site passes through, what it falls back to when a stage fails, and the three points where the pipeline loops back on itself.</p>
 <p class="updated">Six phases. Everything runs in the browser; there is no server anywhere in this diagram.</p>
+</div>
 
+<div class="toc"><p class="h">On this page</p><ol><li><a href="#phase-1-discover">Phase 1 · Discover</a></li><li><a href="#phase-2-shape">Phase 2 · Shape</a></li><li><a href="#phase-3-sample">Phase 3 · Sample</a></li><li><a href="#phase-4-measure">Phase 4 · Measure</a></li><li><a href="#phase-5-interpret">Phase 5 · Interpret</a></li><li><a href="#phase-6-deliver">Phase 6 · Deliver</a></li><li><a href="#what-this-does-not-do">What this does not do</a></li></ol></div>
 <figure>
 <svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to public proxies to twenty-two common sitemap paths to a manual URL list. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
   <defs>
@@ -136,7 +138,7 @@ li{margin-bottom:6px}
 <figcaption>Solid arrows are the happy path. Dashed grey is what happens when a stage fails. Teal is a loop back into an earlier stage, or a side input that changes what a later stage says.</figcaption>
 </figure>
 
-<h2>Phase 1 · Discover</h2>
+<h2 id="phase-1-discover">Phase 1 · Discover<a class="anchor" href="#phase-1-discover" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 
 <h3><span class="n">1.0</span>Run every site at once</h3>
@@ -169,7 +171,7 @@ li{margin-bottom:6px}
 <p>This runs inside the site's own lane rather than after every site has finished, since nothing downstream of discovery waits on it. The homepage is fetched on the same transport and fingerprinted: 20 platforms, 8 image CDNs, the <code>generator</code> meta tag, and on WordPress the installed plugin and theme slugs read out of asset paths. This is a side input; it changes what phase 5 says, not what gets measured.</p>
 </div>
 
-<h2>Phase 2 · Shape</h2>
+<h2 id="phase-2-shape">Phase 2 · Shape<a class="anchor" href="#phase-2-shape" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 
 <h3><span class="n">2.1</span>Normalise</h3>
@@ -186,20 +188,20 @@ li{margin-bottom:6px}
 <div class="note"><b>This is a guess, and it is editable.</b> Step 3 in the app shows every pairing with a dropdown per site listing that site's own collections and page counts. Rename one, repoint a site, mark a site not comparable, or add a pairing the synonym table would never have connected. Editing re-samples immediately.</div>
 </div>
 
-<h2>Phase 3 · Sample</h2>
+<h2 id="phase-3-sample">Phase 3 · Sample<a class="anchor" href="#phase-3-sample" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 <p>Measuring every page of a 4,000-page site is neither affordable nor necessary. The sample is built in a fixed order so that the things a comparison depends on can never be squeezed out by the budget:</p>
-<table>
+<div class="scroller"><table>
 <tr><th>Order</th><th>What goes in</th><th>Why first</th></tr>
 <tr><td>1</td><td>One page per detected role</td><td>Home against home only works if both were measured</td></tr>
 <tr><td>2</td><td>Every paired collection's sample</td><td>A pairing with data on one side only is not a comparison</td></tr>
 <tr><td>3</td><td>Round-robin across remaining collections</td><td>Stops one 5,000-page collection eating the whole budget</td></tr>
-</table>
+</table></div>
 <p>Within a collection the pick is an even, deterministic spread across the sorted list rather than the first N, so a blog sample is not twenty consecutive posts from one week. Caps are 10 per collection and 100 per site, both adjustable. The homepage is always included.</p>
 <div class="note">Every URL stays individually selectable in the app before the run, so the automatic sample is a starting point rather than a decision.</div>
 </div>
 
-<h2>Phase 4 · Measure</h2>
+<h2 id="phase-4-measure">Phase 4 · Measure<a class="anchor" href="#phase-4-measure" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 
 <h3><span class="n">4.1</span>Build the job list</h3>
@@ -218,12 +220,12 @@ li{margin-bottom:6px}
 <div class="fail"><b>On failure:</b> 4 attempts per call, then up to 3 retry sweeps over what still failed, at 4 concurrent. Sweeps skip permanent causes such as <code>NO_FCP</code> or an invalid URL. Anything still failing is grouped by Google's own error text with a manual retry button.</div>
 </div>
 
-<h2>Phase 5 · Interpret</h2>
+<h2 id="phase-5-interpret">Phase 5 · Interpret<a class="anchor" href="#phase-5-interpret" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 
 <h3><span class="n">5.1</span>Extract</h3>
 <p>Each response yields far more than seven numbers. A run whose <code>runtimeError</code> is set is discarded here rather than averaged in, because Lighthouse documents that field as meaning the result may need to be thrown away:</p>
-<table>
+<div class="scroller"><table>
 <tr><th>Lab metrics</th><td>Performance score, LCP, CLS, TBT, FCP, TTFB, Speed Index, and accessibility, best practices and SEO when enabled</td></tr>
 <tr><th>Field data</th><td>CrUX at both page and origin level, with the p75 and the distribution across good, needs improvement and poor. Page-level exists only for URLs with enough traffic; origin-level exists for almost any site with real traffic, and the two are never averaged together.</td></tr>
 <tr><th>Opportunities</th><td>24 audits that name a cause, each with the specific files responsible and their bytes and milliseconds</td></tr>
@@ -233,7 +235,7 @@ li{margin-bottom:6px}
 <tr><th>Composition</th><td>Transferred bytes and request counts by resource type, plus request totals, round-trip time and server latency</td></tr>
 <tr><th>Validity</th><td><code>runtimeError</code>, <code>runWarnings</code> and <code>captchaResult</code></td></tr>
 <tr><th>Provenance</th><td>Requested URL against final document URL, form factor, throttling method, run duration</td></tr>
-</table>
+</table></div>
 
 <h3><span class="n">5.2</span>Aggregate across the sample</h3>
 <p>Findings are rolled up so that one slow asset on forty pages is one finding, not forty. Figures are reported <b>per page</b> throughout: Lighthouse savings summed across a sample produce numbers like "90 seconds wasted", which is not time anyone can save. A resource's size is its own weight, not that weight multiplied by the page count. The across-sample totals survive only as the ranking signal.</p>
@@ -247,21 +249,21 @@ li{margin-bottom:6px}
 <p>The playbook covers 14 platforms by audit id, and 18 plugin slugs carry their own note. If ShortPixel is already installed, the image finding is a bulk run in a plugin they own rather than a purchase.</p>
 </div>
 
-<h2>Phase 6 · Deliver</h2>
+<h2 id="phase-6-deliver">Phase 6 · Deliver<a class="anchor" href="#phase-6-deliver" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 <p>Six outputs, all built from the same model so none of them can drift from the others:</p>
-<table>
+<div class="scroller"><table>
 <tr><th>App</th><td>An operator console. Run validity, comparison, headline figures, real-user data and ranked opportunities stay on screen; the reference material collapses behind disclosures that carry their own headline number. The reports are where the full detail belongs.</td></tr>
 <tr><th>CSV</th><td>Flat rows, one per measurement.</td></tr>
 <tr><th>JSON</th><td>Nested per site, per collection, per role, with the pairings recorded.</td></tr>
 <tr><th>Excel</th><td>14 tabs in the house palette, with the charts rasterised in.</td></tr>
 <tr><th>Google Sheet</th><td>Created live in your Drive under the <code>drive.file</code> scope, with native charts.</td></tr>
 <tr><th>Report</th><td>Print-ready document: method, stack, findings, recommendations with severity and fix risk, roadmap, rubric, and an appendix listing every rule that was evaluated including those that stayed silent.</td></tr>
-</table>
+</table></div>
 <div class="note"><b>The report is byte-deterministic.</b> The only input that varies between two runs on the same measurements is the report date, which is a field rather than a clock read. The app prints the document's SHA-256 so a client copy can be proved identical.</div>
 </div>
 
-<h2>What this does not do</h2>
+<h2 id="what-this-does-not-do">What this does not do<a class="anchor" href="#what-this-does-not-do" aria-label="Link to this section">#</a></h2>
 <div class="phase">
 <ul>
 <li><b>Lab data still leads the findings.</b> Field data is now reported at both page and origin level and the rules rank it above the lab numbers, but the diagnosis underneath is still synthetic and varies between runs. Treat a lab difference under about five performance points as noise.</li>
@@ -273,10 +275,11 @@ li{margin-bottom:6px}
 </div>
 
 <footer>
-<a href="./">PageSpeed Sampler</a>
-<a href="privacy.html">Privacy</a>
-<a href="terms.html">Terms</a>
-<a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+  <a href="./">The tool</a>
+  <a href="flow.html">How it works</a>
+  <a href="privacy.html">Privacy</a>
+  <a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+  <span class="by">Jake Labate, SEO Consultant</span>
 </footer>
 </div>
 </body>
