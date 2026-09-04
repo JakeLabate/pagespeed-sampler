@@ -213,17 +213,15 @@ Opportunities tab and a Stack tab in both workbooks.
 
 ## The deterministic report
 
-The workbook is the data. The report is the document you hand a stakeholder.
+The workbook is the data. The **Report** button produces the document you hand a
+stakeholder: it opens the report and raises the print dialog, and you set the destination
+to Save as PDF.
 
-**Report PDF** opens it and raises the print dialog: set the destination to Save as PDF.
 There is no server to render on, so the browser's own print engine is the renderer, and
 that is the better output as well as the only one available: text stays selectable and
-searchable, and the charts stay vector, neither of which survives a canvas-rasterising
-PDF library. The toolbar in the report is not printed, so the saved PDF matches the file
-the quoted hash describes.
-
-**Report HTML** downloads the file instead, for archiving or for sending on. It carries
-the same Save as PDF button at the top.
+searchable and the charts stay vector, neither of which survives a canvas-rasterising PDF
+library. The report's own title becomes the suggested filename, and the toolbar inside it
+is not printed.
 
 Nothing in it is written by a language model, and nothing is written by hand at
 generation time. A fixed rule set is applied to the measurements. Each rule declares a

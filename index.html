@@ -460,8 +460,7 @@ footer .by{margin-left:auto}
       <button class="btn ghost sm" id="dlJson" type="button">JSON</button>
       <button class="btn ghost sm" id="dlXlsx" type="button">Excel</button>
       <button class="btn sm" id="mkSheet" type="button">Google Sheet</button>
-      <button class="btn sm" id="dlReport" type="button">Report PDF</button>
-      <button class="btn ghost sm" id="dlReportHtml" type="button">Report HTML</button>
+      <button class="btn sm" id="dlReport" type="button">Report</button>
     </div>
   </div>
   <div id="reportNote"></div>
@@ -5323,14 +5322,14 @@ function renderReportHTML(m){
 
   return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
     '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-    '<title>' + E(meta.title) + '</title>\n' +
+    '<title>' + E(meta.title + ' ' + meta.date) + '</title>\n' +
     '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
     '<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">\n' +
     '<style>' + REPORT_CSS + '</style>\n</head>\n<body>\n' +
     /* The bar prints itself out of existence, so the saved PDF is identical to
        the file whose hash is quoted alongside it. */
     '<div class="printbar"><button type="button" onclick="window.print()">Save as PDF</button>' +
-    '<span>Choose &ldquo;Save as PDF&rdquo; as the destination. This bar is not printed.</span></div>' +
+    '<span>Not printed.</span></div>' +
     '<script>document.body.classList.add("hasbar");<\/script>' +
     coverHTML(meta, m) +
     '<section class="page contents"><div class="eyebrow">Contents</div><ol class="toc">' + contents + '</ol></section>' +
@@ -5869,13 +5868,6 @@ $('#mkSheet').addEventListener('click', async () => {
 
 
 /* --- deterministic report button ---------------------------------------- */
-async function sha256Hex(str){
-  try{
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }catch(e){ return null; }
-}
-
 function buildDeterministicReport(){
   const strategies = uniq(state.results.map(r => r.strategy));
   const strategy = ($('#resStrategy') && $('#resStrategy').value) || strategies[0];
@@ -5894,62 +5886,43 @@ function buildDeterministicReport(){
 }
 
 /* There is no server to render a PDF on, so the browser's own print engine is
-   the renderer. It produces selectable text and real vector charts, which a
-   canvas-rasterising library does not, so this is the better output as well as
-   the only one available. */
-async function makeReport(mode){
+   the renderer. It keeps text selectable and charts vector, which a canvas
+   rasteriser would not, so this is the better output as well as the only one
+   available here. The document's title is what the browser offers as the
+   filename, so it is set to something a client can receive. */
+$('#dlReport').addEventListener('click', async () => {
   if(!state.results.length) return;
-  const id = mode === 'pdf' ? '#dlReport' : '#dlReportHtml';
-  const btn = $(id); const was = btn.textContent;
+  const btn = $('#dlReport'); const was = btn.textContent;
   btn.disabled = true; btn.textContent = 'Generating…';
   try{
-    const { html, model, meta } = buildDeterministicReport();
-    const hash = await sha256Hex(html);
-    const blob = new Blob([html], { type:'text/html' });
-    const url = URL.createObjectURL(blob);
-    const fired = model.fired.length, total = RULES.length;
-    const stamp = fired + ' of ' + total + ' rules fired, producing ' + fired +
-      ' recommendation' + (fired === 1 ? '' : 's') + ' across ' + model.c.n + ' measurements.';
-    const sig = hash ? '<br><span class="mono" style="font-size:11px;color:var(--muted)">SHA-256 ' + esc(hash) +
-      '. Regenerating from the same measurements and the same report date reproduces this hash exactly.</span>' : '';
-
-    if(mode === 'pdf'){
-      const w = window.open(url, '_blank');
-      if(!w){
-        $('#reportNote').innerHTML = '<div class="err"><b>The report window was blocked.</b> ' +
-          'Allow pop-ups for this page and press Report PDF again, or use Report HTML and print the file yourself. ' +
-          '<a href="' + url + '" target="_blank" rel="noopener">Open the report</a>.</div>';
-      } else {
-        /* Printing before the webfonts land reflows the document mid-render, so
-           wait for the document's own fonts rather than a guessed delay. */
-        const go = () => {
-          try{
-            const ready = w.document.fonts && w.document.fonts.ready
-              ? w.document.fonts.ready : Promise.resolve();
-            ready.then(() => setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 350));
-          }catch(e){ setTimeout(() => { try{ w.print(); }catch(e2){} }, 1200); }
-        };
-        if(w.document && w.document.readyState === 'complete') go();
-        else w.addEventListener('load', go);
-        $('#reportNote').innerHTML = '<div class="note"><b>Report open in a new tab.</b> ' + stamp +
-          ' The print dialog opens by itself: set the destination to <b>Save as PDF</b>. ' +
-          'The toolbar in the report is not printed, so the PDF matches the file this hash describes.' + sig + '</div>';
-      }
+    const { html, model } = buildDeterministicReport();
+    const url = URL.createObjectURL(new Blob([html], { type:'text/html' }));
+    const w = window.open(url, '_blank');
+    if(!w){
+      $('#reportNote').innerHTML = '<div class="err"><b>The report window was blocked.</b> ' +
+        'Allow pop-ups for this page and press Report again, or ' +
+        '<a href="' + url + '" target="_blank" rel="noopener">open the report</a> and press Save as PDF inside it.</div>';
     } else {
-      const a = document.createElement('a');
-      a.href = url; a.download = 'pagespeed-report-' + runSlug() + '-' + meta.date + '.html';
-      document.body.appendChild(a); a.click(); a.remove();
-      $('#reportNote').innerHTML = '<div class="note"><b>Report downloaded as HTML.</b> ' + stamp +
-        ' Open it and press <b>Save as PDF</b> in the report, or use the Report PDF button to skip the file. ' +
-        '<a href="' + url + '" target="_blank" rel="noopener">Open it now</a>.' + sig + '</div>';
+      /* Printing before the webfonts land reflows the document mid-render, so
+         wait on the document's own fonts rather than a guessed delay. */
+      const go = () => {
+        try{
+          const ready = w.document.fonts && w.document.fonts.ready ? w.document.fonts.ready : Promise.resolve();
+          ready.then(() => setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 350));
+        }catch(e){ setTimeout(() => { try{ w.print(); }catch(e2){} }, 1200); }
+      };
+      if(w.document && w.document.readyState === 'complete') go(); else w.addEventListener('load', go);
+      const fired = model.fired.length;
+      $('#reportNote').innerHTML = '<div class="note"><b>Report open in a new tab, print dialog and all.</b> ' +
+        'Set the destination to <b>Save as PDF</b>. ' + fired + ' of ' + RULES.length +
+        ' rules fired across ' + model.c.n + ' measurements. Regenerating from the same measurements and the ' +
+        'same report date produces an identical document.</div>';
     }
     setTimeout(() => URL.revokeObjectURL(url), 600000);
   }catch(e){
     $('#reportNote').innerHTML = '<div class="err">Could not generate the report: ' + esc(e.message) + '</div>';
   }finally{ btn.disabled = false; btn.textContent = was; }
-}
-$('#dlReport').addEventListener('click', () => makeReport('pdf'));
-$('#dlReportHtml').addEventListener('click', () => makeReport('html'));
+});
 
 /* --------------------------------------------------------------- wiring */
 function originOf(raw){
