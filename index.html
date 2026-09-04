@@ -460,7 +460,8 @@ footer .by{margin-left:auto}
       <button class="btn ghost sm" id="dlJson" type="button">JSON</button>
       <button class="btn ghost sm" id="dlXlsx" type="button">Excel</button>
       <button class="btn sm" id="mkSheet" type="button">Google Sheet</button>
-      <button class="btn sm" id="dlReport" type="button">Report</button>
+      <button class="btn sm" id="dlReport" type="button">Report PDF</button>
+      <button class="btn ghost sm" id="dlReportHtml" type="button">Report HTML</button>
     </div>
   </div>
   <div id="reportNote"></div>
@@ -5013,15 +5014,23 @@ const REPORT_CSS = [
 'table{width:100%;border-collapse:collapse;font-size:10pt;margin:0 0 14px}',
 'table.data th{background:var(--ink);color:#fff;text-align:left;font-family:"IBM Plex Mono",monospace;',
 'font-size:8pt;letter-spacing:.08em;text-transform:uppercase;padding:7px 9px;font-weight:500}',
-'table.data td{padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top}',
+'table.data td{padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}',
+'table.data{table-layout:fixed}',
 'table.data tbody tr:nth-child(even) td{background:var(--soft)}',
-'table.kv{font-size:10pt}',
+'table.kv{font-size:10pt;table-layout:fixed;width:100%}',
 'table.kv th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:8.5pt;letter-spacing:.05em;',
-'color:var(--ink2);font-weight:500;padding:5px 12px 5px 0;width:44%;vertical-align:top;border-bottom:1px solid var(--rule)}',
-'table.kv td{padding:5px 0;border-bottom:1px solid var(--rule);vertical-align:top}',
+'color:var(--ink2);font-weight:500;padding:5px 12px 5px 0;width:36%;vertical-align:top;',
+'border-bottom:1px solid var(--rule);overflow-wrap:anywhere}',
+'table.kv td{padding:5px 0;border-bottom:1px solid var(--rule);vertical-align:top;',
+'overflow-wrap:anywhere;word-break:break-word}',
+'table.kv td .u{font-family:"IBM Plex Mono",monospace;font-size:8.5pt;color:var(--ink2)}',
+'table.kv td ul{margin:0;padding-left:15px}table.kv td li{margin-bottom:4px}',
 'code{font-family:"IBM Plex Mono",monospace;font-size:9pt;background:var(--soft);padding:1px 5px;border-radius:3px}',
 '.card{border:1px solid var(--rule);border-left:3px solid var(--teal);border-radius:4px;',
-'padding:14px 16px;margin:0 0 13px;break-inside:avoid;page-break-inside:avoid}',
+'padding:14px 16px;margin:0 0 13px}',
+'.cardhead,.pills,.card .lede{break-after:avoid;page-break-after:avoid}',
+'.card h3{break-after:avoid;page-break-after:avoid}',
+'table.kv tr{break-inside:avoid;page-break-inside:avoid}',
 '.card .lede{margin-bottom:11px;font-size:11pt}',
 '.card table.kv{font-size:9.5pt}.card table.kv th{padding:4px 10px 4px 0}.card table.kv td{padding:4px 0}',
 '.card .steps li{margin-bottom:4px}',
@@ -5034,7 +5043,7 @@ const REPORT_CSS = [
 '.pill.plain{background:var(--soft);color:var(--ink2);border-color:var(--rule)}',
 '.pill em{font-style:normal;opacity:.6;margin-right:4px}',
 '.lede{font-size:11.5pt;color:var(--ink2);margin-bottom:13px;max-width:66ch}',
-'.two{display:grid;grid-template-columns:1fr 1fr;gap:22px}',
+'.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}',
 '.lbl{font-family:"IBM Plex Mono",monospace;font-size:8pt;letter-spacing:.1em;text-transform:uppercase;',
 'color:var(--muted);margin:0 0 6px}',
 '.two .lbl:not(:first-child){margin-top:14px}',
@@ -5054,10 +5063,25 @@ const REPORT_CSS = [
 '.chartkey span{display:inline-flex;align-items:center;gap:5px}',
 '.chartkey i{width:9px;height:9px;border-radius:2px;display:inline-block}',
 '@page{size:A4;margin:0}',
-'@media print{body{background:#fff}',
+'@media print{body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
 '.cover,.page{margin:0;box-shadow:none;break-before:page;page-break-before:always;min-height:0;height:auto}',
 '.cover{height:297mm;break-before:auto;page-break-before:auto}',
+'.printbar{display:none!important}',
+'h2,h3{break-after:avoid;page-break-after:avoid}',
+'figure.chart,.count,.callout,.thesis{break-inside:avoid;page-break-inside:avoid}',
+'table.data thead{display:table-header-group}',
+'table.data tr{break-inside:avoid;page-break-inside:avoid}',
 'a{color:inherit;text-decoration:none}}',
+/* On screen the report offers its own Save as PDF, because a client copy that
+   arrives as a raw HTML file is a step short of a deliverable. */
+'.printbar{position:fixed;top:0;left:0;right:0;z-index:99;display:flex;align-items:center;gap:14px;',
+'padding:10px 18px;background:var(--ink);color:#fff;font-size:10.5pt;',
+'font-family:"Space Grotesk",sans-serif}',
+'.printbar button{font:inherit;font-size:10pt;font-weight:600;background:var(--teal);color:#fff;',
+'border:0;border-radius:5px;padding:7px 15px;cursor:pointer}',
+'.printbar button:hover{filter:brightness(1.1)}',
+'.printbar span{color:rgba(255,255,255,.7)}',
+'body.hasbar{padding-top:44px}',
 '@media screen{.cover,.page{box-shadow:0 1px 3px rgba(0,0,0,.10),0 12px 34px rgba(0,0,0,.09)}',
 'body{padding:10mm 0}}'
 ].join('');
@@ -5303,6 +5327,11 @@ function renderReportHTML(m){
     '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
     '<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">\n' +
     '<style>' + REPORT_CSS + '</style>\n</head>\n<body>\n' +
+    /* The bar prints itself out of existence, so the saved PDF is identical to
+       the file whose hash is quoted alongside it. */
+    '<div class="printbar"><button type="button" onclick="window.print()">Save as PDF</button>' +
+    '<span>Choose &ldquo;Save as PDF&rdquo; as the destination. This bar is not printed.</span></div>' +
+    '<script>document.body.classList.add("hasbar");<\/script>' +
     coverHTML(meta, m) +
     '<section class="page contents"><div class="eyebrow">Contents</div><ol class="toc">' + contents + '</ol></section>' +
     secs.map(s =>
@@ -5332,9 +5361,26 @@ function cardHTML(f, num, sevPill, plainPill){
       '</div></div>' +
     '</article>';
 }
+/* Three rows all labelled "Largest bundle" read as a rendering fault rather
+   than a list. Consecutive rows sharing a key collapse into one row whose value
+   is the list, and the label is pluralised. */
 function kvTable(rows){
-  return '<table class="kv"><tbody>' + rows.map(([k, v]) =>
-    '<tr><th>' + esc(k) + '</th><td>' + esc(v) + '</td></tr>').join('') + '</tbody></table>';
+  const out = [];
+  for(const [k, v] of rows){
+    const last = out[out.length - 1];
+    if(last && last.k === k) last.v.push(v);
+    else out.push({ k, v: [v] });
+  }
+  return '<table class="kv"><tbody>' + out.map(r =>
+    '<tr><th>' + esc(r.v.length > 1 ? plural(r.k) : r.k) + '</th><td>' +
+    (r.v.length > 1
+      ? '<ul>' + r.v.map(v => '<li>' + esc(v) + '</li>').join('') + '</ul>'
+      : esc(r.v[0])) +
+    '</td></tr>').join('') + '</tbody></table>';
+}
+function plural(k){
+  if(/s$/i.test(k)) return k;
+  return k.replace(/\b(bundle|file|resource|vendor|page|element|script|image|request)\b(?!.*\b\1\b)/i, '$1s');
 }
 function tableHTML(headers, rows, raw){
   return '<table class="data"><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') +
@@ -5847,31 +5893,63 @@ function buildDeterministicReport(){
   return { html: renderReportHTML(model), model, meta };
 }
 
-$('#dlReport').addEventListener('click', async () => {
+/* There is no server to render a PDF on, so the browser's own print engine is
+   the renderer. It produces selectable text and real vector charts, which a
+   canvas-rasterising library does not, so this is the better output as well as
+   the only one available. */
+async function makeReport(mode){
   if(!state.results.length) return;
-  const btn = $('#dlReport'); const was = btn.textContent;
+  const id = mode === 'pdf' ? '#dlReport' : '#dlReportHtml';
+  const btn = $(id); const was = btn.textContent;
   btn.disabled = true; btn.textContent = 'Generating…';
   try{
     const { html, model, meta } = buildDeterministicReport();
     const hash = await sha256Hex(html);
     const blob = new Blob([html], { type:'text/html' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = 'pagespeed-report-' + runSlug() + '-' + meta.date + '.html';
-    document.body.appendChild(a); a.click(); a.remove();
     const fired = model.fired.length, total = RULES.length;
-    $('#reportNote').innerHTML = '<div class="note"><b>Report generated.</b> ' +
-      fired + ' of ' + total + ' rules fired, producing ' + fired + ' recommendation' + (fired === 1 ? '' : 's') +
-      ' across ' + model.c.n + ' measurements. Downloaded as HTML; open it and print to PDF for the client copy. ' +
-      '<a href="' + url + '" target="_blank" rel="noopener">Open it now</a>.' +
-      (hash ? '<br><span class="mono" style="font-size:11px;color:var(--muted)">SHA-256 ' + esc(hash) +
-        '. Regenerating from the same measurements and the same report date reproduces this hash exactly.</span>' : '') +
-      '</div>';
+    const stamp = fired + ' of ' + total + ' rules fired, producing ' + fired +
+      ' recommendation' + (fired === 1 ? '' : 's') + ' across ' + model.c.n + ' measurements.';
+    const sig = hash ? '<br><span class="mono" style="font-size:11px;color:var(--muted)">SHA-256 ' + esc(hash) +
+      '. Regenerating from the same measurements and the same report date reproduces this hash exactly.</span>' : '';
+
+    if(mode === 'pdf'){
+      const w = window.open(url, '_blank');
+      if(!w){
+        $('#reportNote').innerHTML = '<div class="err"><b>The report window was blocked.</b> ' +
+          'Allow pop-ups for this page and press Report PDF again, or use Report HTML and print the file yourself. ' +
+          '<a href="' + url + '" target="_blank" rel="noopener">Open the report</a>.</div>';
+      } else {
+        /* Printing before the webfonts land reflows the document mid-render, so
+           wait for the document's own fonts rather than a guessed delay. */
+        const go = () => {
+          try{
+            const ready = w.document.fonts && w.document.fonts.ready
+              ? w.document.fonts.ready : Promise.resolve();
+            ready.then(() => setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 350));
+          }catch(e){ setTimeout(() => { try{ w.print(); }catch(e2){} }, 1200); }
+        };
+        if(w.document && w.document.readyState === 'complete') go();
+        else w.addEventListener('load', go);
+        $('#reportNote').innerHTML = '<div class="note"><b>Report open in a new tab.</b> ' + stamp +
+          ' The print dialog opens by itself: set the destination to <b>Save as PDF</b>. ' +
+          'The toolbar in the report is not printed, so the PDF matches the file this hash describes.' + sig + '</div>';
+      }
+    } else {
+      const a = document.createElement('a');
+      a.href = url; a.download = 'pagespeed-report-' + runSlug() + '-' + meta.date + '.html';
+      document.body.appendChild(a); a.click(); a.remove();
+      $('#reportNote').innerHTML = '<div class="note"><b>Report downloaded as HTML.</b> ' + stamp +
+        ' Open it and press <b>Save as PDF</b> in the report, or use the Report PDF button to skip the file. ' +
+        '<a href="' + url + '" target="_blank" rel="noopener">Open it now</a>.' + sig + '</div>';
+    }
     setTimeout(() => URL.revokeObjectURL(url), 600000);
   }catch(e){
     $('#reportNote').innerHTML = '<div class="err">Could not generate the report: ' + esc(e.message) + '</div>';
   }finally{ btn.disabled = false; btn.textContent = was; }
-});
+}
+$('#dlReport').addEventListener('click', () => makeReport('pdf'));
+$('#dlReportHtml').addEventListener('click', () => makeReport('html'));
 
 /* --------------------------------------------------------------- wiring */
 function originOf(raw){
