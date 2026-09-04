@@ -5,8 +5,8 @@ set of URLs across its collection types, measures each one with the Google PageS
 Insights API, and reports the averages. Add up to four sites and it benchmarks them
 against each other.
 
-**Live: https://jakelabate.github.io/pagespeed-sampler/**
-**Full pipeline: https://jakelabate.github.io/pagespeed-sampler/flow.html**
+**Live: https://pagespeed.jakelabate.com/**
+**Full pipeline: https://pagespeed.jakelabate.com/flow.html**
 
 ## What it does
 
