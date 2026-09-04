@@ -190,6 +190,13 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .cmpgroup > summary::-webkit-details-marker{display:none}
 .cmpgroup > summary:before{content:"▸ ";color:var(--muted)}
 .cmpgroup[open] > summary:before{content:"▾ "}
+/* Sites discover concurrently, so their output has to stay grouped by site or
+   the log becomes four interleaved streams nobody can read. */
+.sitelog{display:block}
+.sitelog + .sitelog{margin-top:10px;padding-top:9px;border-top:1px dashed var(--grid)}
+.ledger{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:11px;color:var(--muted);
+  margin-top:9px;font-family:ui-monospace,Menlo,monospace}
+.ledger b{color:var(--ink-2);font-weight:600}
 .panels{margin-top:26px;border-top:1px solid var(--grid)}
 .rpanel{border-bottom:1px solid var(--grid)}
 .rpanel > summary{list-style:none;cursor:pointer;padding:13px 2px;display:flex;align-items:baseline;gap:12px;user-select:none}
@@ -357,7 +364,8 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
   </details>
 
   <div class="btnrow" style="margin-top:16px">
-    <button class="btn" id="discoverBtn" type="button">Find sitemaps and sample URLs</button>
+    <button class="btn" id="sweepBtn" type="button">Run the whole sweep</button>
+    <button class="btn ghost sm" id="discoverBtn" type="button">Find sitemaps only</button>
     <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
     <button class="btn ghost sm hidden" id="stopDiscover" type="button">Stop searching</button>
   </div>
@@ -390,6 +398,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
     <span class="prognote" id="runNote"></span><span class="prognote" id="inFlight" style="color:var(--muted)"></span>
   </div>
   <div class="progress hidden" id="progWrap"><i id="progBar"></i></div>
+  <div class="ledger" id="ledger"></div>
   <div id="runErr"></div>
 </section>
 
@@ -507,6 +516,12 @@ const mean = a => { const v = a.filter(x => x != null && isFinite(x)); return v.
 const median = a => { const v = a.filter(x => x != null && isFinite(x)).sort((x,y)=>x-y); if(!v.length) return null;
   const h = Math.floor(v.length/2); return v.length % 2 ? v[h] : (v[h-1]+v[h])/2; };
 
+function fmtSecs(ms){
+  if(ms == null || !isFinite(ms)) return '';
+  const s = ms / 1000;
+  return s < 10 ? s.toFixed(1) + 's' : Math.round(s) + 's';
+}
+
 /* --------------------------------------------------------------- fetching */
 const PROXIES = [
   { name:'direct',     url: u => u },
@@ -516,7 +531,94 @@ const PROXIES = [
   { name:'isomorphic', url: u => 'https://cors.isomorphic-git.org/' + u },
   { name:'thingproxy', url: u => 'https://thingproxy.freeboard.io/fetch/' + u }
 ];
-let transport = null;   // the PROXIES entry that works for this site
+
+/* Health is shared across every site in a run and across runs in this tab. A
+   proxy that is timing out for one site is timing out for all of them, and
+   rediscovering that fact once per site is most of what made a multi-site
+   discovery slow. Score is a latency estimate penalised by failures, so the
+   ordering settles on whatever is actually fast right now. */
+const proxyHealth = (function(){
+  const h = {};
+  PROXIES.forEach(p => { h[p.name] = { ok:0, fail:0, ms:600 }; });
+  try{
+    const saved = JSON.parse(localStorage.getItem('pss.proxyHealth') || 'null');
+    if(saved) for(const k in h) if(saved[k]) Object.assign(h[k], saved[k]);
+  }catch(e){}
+  return h;
+})();
+function saveHealth(){
+  try{ localStorage.setItem('pss.proxyHealth', JSON.stringify(proxyHealth)); }catch(e){}
+}
+function healthScore(name){
+  const h = proxyHealth[name];
+  if(!h) return 1e9;
+  const attempts = h.ok + h.fail;
+  const failRate = attempts ? h.fail / attempts : 0;
+  return h.ms * (1 + failRate * 4);
+}
+function recordProxy(name, ms, ok){
+  const h = proxyHealth[name];
+  if(!h) return;
+  if(ok){ h.ok++; h.ms = Math.round(h.ms * 0.7 + ms * 0.3); }
+  else { h.fail++; h.ms = Math.round(h.ms * 0.85 + Math.min(ms, 30000) * 0.15); }
+}
+
+/* Concurrency is set per lane rather than by one global number, because the
+   lanes have different limits. Sitemap fetches are bounded by what a free proxy
+   tolerates, so the proxied figures are per-run totals spread across every
+   healthy proxy, not per proxy. Site-level parallelism is what removes the
+   old cost of discovering four sites one after another. */
+const CONC = {
+  sites: 4, sitesDirect: 6,
+  paths: 10, pathsDirect: 14, perProxy: 3,
+  children: 9, childrenDirect: 12,
+  sweep: 4
+};
+
+/* One context per site. Sites used to share a single module-level `transport`,
+   which is the only reason discovery had to run them one after another. */
+function newCtx(allowProxy){
+  return {
+    tp: null,
+    allowProxy: allowProxy !== false,
+    alts: [],            // hedge candidates, unproven until one of them answers
+    rotation: [],        // proxies that have actually served this site
+    strikes: {},
+    rr: 0,
+    proxied(){ return !!(this.tp && this.tp.name !== 'direct'); },
+    timeout(){ return this.proxied() ? 30000 : 18000; },
+    out(p){ return (this.strikes[p.name] || 0) >= 3; },
+    /* A proxy earns its place in the rotation by answering. Spreading load
+       across proxies only helps while they all work; rotating onto one that is
+       stalling just moves the stall around, which is what a fixed alt list did.
+       Three failures and it is dropped for the rest of the site. */
+    reward(p){
+      this.strikes[p.name] = 0;
+      if(!this.rotation.includes(p)) this.rotation.push(p);
+    },
+    penalise(p){
+      this.strikes[p.name] = (this.strikes[p.name] || 0) + 1;
+      if(this.out(p)){
+        this.rotation = this.rotation.filter(x => x !== p);
+        this.alts = this.alts.filter(x => x !== p);
+        if(!this.rotation.length && this.tp && !this.out(this.tp)) this.rotation = [this.tp];
+      }
+    },
+    order(fanout){
+      if(!this.tp) return [PROXIES[0]];
+      if(!this.proxied()) return [this.tp];
+      let rot = this.rotation.filter(p => !this.out(p));
+      if(!rot.length) rot = [this.tp];
+      const primary = rot[this.rr++ % rot.length];
+      const out = [primary];
+      const n = Math.max(1, fanout || 1);
+      const rest = rot.filter(p => p !== primary)
+        .concat(this.alts.filter(p => !rot.includes(p) && !this.out(p)));
+      for(const p of rest){ if(out.length >= n) break; out.push(p); }
+      return out;
+    }
+  };
+}
 
 async function rawFetch(target, timeout){
   const ctrl = new AbortController();
@@ -534,63 +636,129 @@ async function rawFetch(target, timeout){
   }
 }
 
-/* One up-front probe decides which transport this site needs, so we never pay
-   the full proxy fallback chain on every one of the candidate sitemap paths. */
-async function probeTransport(origin, allowProxy, log){
-  const targets = [origin + '/robots.txt', origin + '/'];
-  const cands = PROXIES.filter(p => p.name === 'direct' || allowProxy);
-  for(const t of targets){
-    for(const p of cands){
-      const r = await rawFetch(p.url(t), 10000);
-      if(r.ok && r.text != null){
-        transport = p;
-        logLine(log, 'Transport: ' + (p.name === 'direct'
-          ? 'direct browser fetch (site sends CORS headers)'
-          : 'public proxy "' + p.name + '" (site blocks direct browser fetch)'), 'ok');
-        return p;
-      }
-    }
-  }
-  transport = null;
-  logLine(log, 'No transport could reach ' + origin + (allowProxy ? '' : ' (proxies are disabled)'), 'bad');
-  return null;
+/* Sequential fallback means the slowest proxy sets the wall clock: you wait the
+   full timeout to learn nothing, then start over somewhere else. Hedging starts
+   a second transport while the first is still outstanding and takes whichever
+   answers, so a stalled proxy costs the hedge delay instead of the timeout. */
+function hedgedFetch(url, ctx, opts){
+  opts = opts || {};
+  const order = ctx.order(opts.fanout == null ? 2 : opts.fanout);
+  const timeout = opts.timeout || ctx.timeout();
+  const stagger = opts.hedgeAfter == null
+    ? Math.max(2500, Math.min(7000, Math.round(timeout * 0.35)))
+    : opts.hedgeAfter;
+  const minBytes = opts.minBytes == null ? 8 : opts.minBytes;
+  return new Promise(resolve => {
+    let settled = false, done = 0, why = 'unreachable';
+    const timers = [];
+    const finish = v => {
+      if(settled) return;
+      settled = true;
+      timers.forEach(clearTimeout);
+      resolve(v);
+    };
+    order.forEach((p, i) => {
+      const go = () => {
+        if(settled) return;
+        const t0 = Date.now();
+        rawFetch(p.url(url), timeout).then(r => {
+          done++;
+          const ms = Date.now() - t0;
+          const good = r.ok && r.text && r.text.length > minBytes;
+          recordProxy(p.name, ms, good);
+          if(ctx.reward){ good ? ctx.reward(p) : ctx.penalise(p); }
+          if(good) finish({ ok:true, text:r.text, via:p.name, ms });
+          else { why = r.why || why; if(done >= order.length) finish({ ok:false, why }); }
+        });
+      };
+      if(i === 0) go(); else timers.push(setTimeout(go, stagger * i));
+    });
+  });
 }
 
-const proxied = () => !!(transport && transport.name !== 'direct');
-
-/* A public proxy adds a full extra round trip and rate-limits, so proxied
-   requests get a longer window than direct ones. */
-function defaultTimeout(){ return proxied() ? 35000 : 20000; }
-
-/* This used to walk all five remaining transports on any failure, which meant a
-   single slow child sitemap cost up to two minutes and hammered a free proxy
-   with six sequential attempts. A timeout means slow, not blocked, so it retries
-   the same transport with a wider window; only a non-timeout failure is worth
-   trying somewhere else, and then only once. */
-async function fetchText(url, { timeout, tries = 2 } = {}){
-  const base = timeout || defaultTimeout();
-  if(!transport){
-    const r = await rawFetch(url, base);
+async function fetchText(url, opts){
+  opts = opts || {};
+  const ctx = opts.ctx;
+  if(!ctx || !ctx.tp){
+    const r = await rawFetch(url, opts.timeout || 18000);
     if(r.ok && r.text) return { text: r.text, via: 'direct' };
     throw new Error(r.why || 'unreachable');
   }
-  let last = null;
-  for(let i = 0; i < tries; i++){
-    const r = await rawFetch(transport.url(url), base + i * 12000);
-    if(r.ok && r.text && r.text.length > 8) return { text: r.text, via: transport.name };
-    last = r;
-    if(r.why !== 'timeout') break;          // a different failure will not be fixed by waiting
-    await sleep(500);
+  const r = await hedgedFetch(url, ctx, opts);
+  if(r.ok) return { text: r.text, via: r.via };
+  throw new Error(r.why || 'unreachable');
+}
+
+/* The probe used to walk two targets across six proxies one at a time, so a
+   site behind a slow proxy paid up to two minutes before discovery started.
+   Race them instead, and keep the body: robots.txt is the probe target and the
+   first thing discovery needs, so fetching it twice was pure waste. */
+async function probeTransport(origin, allowProxy, log, ctx){
+  const cands = PROXIES.filter(p => p.name === 'direct' || allowProxy)
+    .slice().sort((a,b) => healthScore(a.name) - healthScore(b.name));
+  const target = origin + '/robots.txt';
+  /* Direct must win whenever it works: it is faster than any proxy and it is
+     the only transport that does not hand every audited URL to a third party.
+     A CORS-blocked direct fetch fails almost immediately, so a head start costs
+     nothing on sites that need a proxy, and if a proxy answers first we still
+     give direct a short grace period before conceding. */
+  const direct = cands[0] && cands[0].name === 'direct' ? cands[0] : null;
+  const others = cands.filter(p => p !== direct);
+  const HEAD_START = 1200, GRACE = 800;
+
+  const winner = await new Promise(resolve => {
+    let settled = false, done = 0, directDone = false, provisional = null;
+    const timers = [];
+    const finish = v => { if(settled) return; settled = true; timers.forEach(clearTimeout); resolve(v); };
+    const attempt = (p, onResult) => {
+      const t0 = Date.now();
+      rawFetch(p.url(target), 12000).then(r => {
+        done++;
+        const good = !!(r.ok && r.text != null);
+        recordProxy(p.name, Date.now() - t0, good);
+        onResult(good ? { p, robots: r.text } : null);
+      });
+    };
+    if(direct) attempt(direct, hit => {
+      directDone = true;
+      if(hit) finish(hit);
+      else if(provisional) finish(provisional);
+      else if(done >= cands.length) finish(null);
+    });
+    others.forEach((p, i) => {
+      const go = () => {
+        if(settled) return;
+        attempt(p, hit => {
+          if(hit){
+            if(!direct || directDone) finish(hit);
+            else if(!provisional){
+              provisional = hit;
+              timers.push(setTimeout(() => finish(provisional), GRACE));
+            }
+          } else if(done >= cands.length) finish(provisional);
+        });
+      };
+      timers.push(setTimeout(go, (direct ? HEAD_START : 0) + i * 350));
+    });
+    if(!cands.length) finish(null);
+  });
+  if(!winner){
+    ctx.tp = null;
+    logLine(log, 'No transport could reach ' + origin + (allowProxy ? '' : ' (proxies are disabled)'), 'bad');
+    saveHealth();
+    return null;
   }
-  if(last && last.why !== 'timeout'){
-    for(const pr of PROXIES){
-      if(pr === transport) continue;
-      const r2 = await rawFetch(pr.url(url), base);
-      if(r2.ok && r2.text && r2.text.length > 8) return { text: r2.text, via: pr.name };
-      break;                                 // one alternate, not all of them
-    }
-  }
-  throw new Error((last && last.why) || 'unreachable');
+  ctx.tp = winner.p;
+  ctx.robots = winner.robots;
+  ctx.rotation = [winner.p];
+  ctx.alts = PROXIES.filter(p => p.name !== 'direct' && p !== winner.p && allowProxy)
+    .sort((a,b) => healthScore(a.name) - healthScore(b.name)).slice(0, 3);
+  logLine(log, 'Transport: ' + (winner.p.name === 'direct'
+    ? 'direct browser fetch (site sends CORS headers)'
+    : 'public proxy "' + winner.p.name + '"' +
+      (ctx.alts.length ? ', hedging to ' + ctx.alts.map(a => a.name).join(' and ') : '')), 'ok');
+  saveHealth();
+  return winner.p;
 }
 
 async function mapLimit(items, limit, fn){
@@ -634,6 +802,7 @@ function keyPageType(u){
 }
 
 function logLine(node, text, cls){
+  if(!node) return;
   const s = el('span', cls || '', text + '\n');
   node.appendChild(s); node.scrollTop = node.scrollHeight;
 }
@@ -681,7 +850,8 @@ function parseSitemap(text, baseUrl){
   return out;
 }
 
-async function discover(origin, opts, log){
+async function discover(origin, opts, log, ctx){
+  ctx = ctx || newCtx(opts.allowProxy);
   const found = [];
   const seenSitemaps = new Set();
   const roots = [];
@@ -692,13 +862,15 @@ async function discover(origin, opts, log){
   const outOfTime = () => Date.now() > deadline;
   const left = () => Math.max(4000, deadline - Date.now());
 
-  const tp = await probeTransport(origin, opts.allowProxy, log);
-  if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true, rootsFound: 0, childFailures: [] };
+  const tp = await probeTransport(origin, opts.allowProxy, log, ctx);
+  if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true, rootsFound: 0, childFailures: [], ctx };
 
-  // 1. robots.txt is authoritative when it declares a sitemap
-  logLine(log, 'GET /robots.txt', 'dim');
+  /* The probe already fetched robots.txt to decide the transport, so reading it
+     again here cost a second round trip for a body we were holding. */
+  logLine(log, 'robots.txt (read during the transport probe)', 'dim');
   try{
-    const r = await fetchText(origin + '/robots.txt', { timeout: 15000 });
+    const r = { text: ctx.robots != null ? ctx.robots
+                : (await fetchText(origin + '/robots.txt', { ctx, timeout: 15000 })).text };
     const decl = uniq((r.text.match(/^[^\S\n]*sitemap[^\S\n]*:[^\n]+/gim) || [])
       .map(l => l.replace(/^[^\S\n]*sitemap[^\S\n]*:[^\S\n]*/i, '').trim())
       .filter(v => /^https?:\/\//i.test(v)));
@@ -713,9 +885,10 @@ async function discover(origin, opts, log){
   // 2. fall back to the common path list, probed in parallel
   if(!roots.length){
     logLine(log, 'Probing ' + SITEMAP_PATHS.length + ' common sitemap paths…', 'dim');
-    const hits = await mapLimit(SITEMAP_PATHS, proxied() ? 3 : 6, async path => {
+    const hits = await mapLimit(SITEMAP_PATHS, ctx.proxied() ? CONC.paths : CONC.pathsDirect, async path => {
       try{
-        const r = await fetchText(origin + path, { timeout: proxied() ? 20000 : 12000, tries: 1 });
+        const r = await fetchText(origin + path, { ctx, fanout: 1,
+          timeout: Math.min(ctx.proxied() ? 14000 : 10000, left()) });
         const parsed = parseSitemap(r.text, origin + path);
         if(parsed.kind !== 'unknown' && (parsed.urls.length || parsed.children.length)) return { path, parsed };
       }catch(e){}
@@ -751,16 +924,22 @@ async function discover(origin, opts, log){
     const batch = queue.filter(u => !seenSitemaps.has(u)).slice(0, opts.maxChild - walked.length);
     batch.forEach(u => seenSitemaps.add(u));
     queue = [];
-    if(batch.length > 2) logLine(log, '  fetching ' + batch.length + ' child sitemaps, ' +
-      (proxied() ? '2' : '5') + ' at a time…', 'dim');
-    const parsedBatch = await mapLimit(batch, proxied() ? 2 : 5, async sm => {
+    /* Nine at a time is safe across three working proxies and abusive against
+       one, so the width follows how many have actually answered. */
+    const working = ctx.proxied()
+      ? Math.max(1, ctx.rotation.filter(pr => !ctx.out(pr)).length) : 1;
+    const conc = ctx.proxied()
+      ? Math.min(CONC.children, CONC.perProxy * working + 1) : CONC.childrenDirect;
+    if(batch.length > 2) logLine(log, '  fetching ' + batch.length + ' child sitemaps, ' + conc +
+      ' at a time' + (working > 1 ? ' spread across ' + working + ' proxies' : '') + '…', 'dim');
+    const parsedBatch = await mapLimit(batch, conc, async sm => {
       /* The deadline has to be checked per item, not per depth level: a single
          index can hand back twelve children as one batch, and checking only at
          the top of the loop let all twelve run past the budget. */
       if(state.cancel || outOfTime()) return { sm, err: 'budget reached' };
       if(/\.gz$/i.test(sm)) return { sm, skip:'gzip' };
       try{
-        const r = await fetchText(sm, { timeout: Math.min(18000, left()), tries: 1 });
+        const r = await fetchText(sm, { ctx, timeout: Math.min(16000, left()) });
         return { sm, parsed: parseSitemap(r.text, sm) };
       }catch(e){ return { sm, err: e.message }; }
     });
@@ -795,18 +974,26 @@ async function discover(origin, opts, log){
   if(failed.length && !outOfTime()){
     const SWEEP_CAP = 4;
     const sweep = failed.slice(0, SWEEP_CAP);
-    const alts = PROXIES.filter(pr => pr !== transport && pr.name !== 'direct');
+    const alts = PROXIES.filter(pr => pr !== ctx.tp && pr.name !== 'direct' && !ctx.out(pr));
     logLine(log, '  retrying ' + sweep.length + ' failed sitemap' + (sweep.length > 1 ? 's' : '') +
       ' through a different proxy' + (failed.length > SWEEP_CAP ? ', ' + (failed.length - SWEEP_CAP) + ' left' : '') + '…', 'dim');
     const stillFailed = failed.slice(SWEEP_CAP);
-    for(const sm of sweep){
-      if(state.cancel || outOfTime()){ stillFailed.push(sm); continue; }
-      let got = null;
-      for(const pr of alts.slice(0, 2)){
-        if(outOfTime()) break;
-        const r = await rawFetch(pr.url(sm), Math.min(15000, left()));
-        if(r.ok && r.text && r.text.length > 8){ got = { text: r.text, via: pr.name }; break; }
-      }
+    /* The sweep used to run one sitemap at a time through up to two proxies in
+       series, so four stragglers could eat a minute of the budget on their own.
+       They are independent requests to different hosts; run them together. */
+    const swept = await mapLimit(sweep, CONC.sweep, async sm => {
+      if(state.cancel || outOfTime()) return { sm, got: null };
+      const pool = alts.slice(0, 2);
+      if(!pool.length) return { sm, got: null };
+      const t0 = Date.now();
+      const results = await Promise.all(pool.map(pr =>
+        rawFetch(pr.url(sm), Math.min(14000, left())).then(r => ({ pr, r }))));
+      const hit = results.find(x => x.r.ok && x.r.text && x.r.text.length > 8);
+      results.forEach(x => recordProxy(x.pr.name, Date.now() - t0,
+        !!(x.r.ok && x.r.text && x.r.text.length > 8)));
+      return { sm, got: hit ? { text: hit.r.text, via: hit.pr.name } : null };
+    });
+    for(const { sm, got } of swept){
       if(!got){ stillFailed.push(sm); logLine(log, '  still failing ' + shortSm(sm), 'bad'); continue; }
       const parsed = parseSitemap(got.text, sm);
       if(parsed.urls.length){
@@ -815,11 +1002,12 @@ async function discover(origin, opts, log){
         logLine(log, '  recovered ' + shortSm(sm) + ' via ' + got.via + ' -> ' + parsed.urls.length + ' URLs', 'ok');
       } else { stillFailed.push(sm); }
     }
+    saveHealth();
     failed.length = 0;
     stillFailed.forEach(x => failed.push(x));
   }
 
-  return { urls: found, sitemaps: walked, ok: found.length > 0,
+  return { urls: found, sitemaps: walked, ok: found.length > 0, ctx,
            rootsFound: roots.length, childFailures: failed.slice(), childrenSeen: seenSitemaps.size };
 }
 function shortSm(u){ try{ return new URL(u).pathname; }catch(e){ return u; } }
@@ -881,11 +1069,11 @@ function detectWpPlugins(html){
   return { plugins: Array.from(found).sort(), themes: Array.from(themes).sort() };
 }
 
-async function detectStack(origin, log){
+async function detectStack(origin, log, ctx){
   const out = { origin, primary: null, also: [], plugins: [], themes: [], imageCdns: [], generator: null, ok: false };
   let html = '';
   try{
-    const r = await fetchText(origin + '/', { timeout: 20000 });
+    const r = await fetchText(origin + '/', { ctx, timeout: 18000 });
     html = r.text || '';
   }catch(e){
     if(log) logLine(log, '  stack detection unavailable (' + e.message + ')', 'dim');
@@ -2059,12 +2247,36 @@ const limiter = {
      pool and every request above its real capacity comes back 500, burning quota
      to learn a number. So open at a sane width and climb toward the burst on
      sustained success instead: additive increase, multiplicative decrease. */
+  lat: [],            // recent successful call durations, ms
+  learned: null,      // ceiling carried over from the last run in this tab
   reset(perMinute, ceiling){
     this.perMinute = perMinute;
     this.starts = []; this.pausedUntil = 0; this.inFlight = 0;
     this.maxCeiling = ceiling;
-    this.ceiling = Math.min(ceiling, 40);
+    this.lat = [];
+    /* Opening at a fixed 40 every run means relearning the same number every
+       run. The last run's settled ceiling is a far better starting guess than a
+       constant, so carry it over, clamped so a bad run cannot poison the next. */
+    try{
+      const v = parseInt(localStorage.getItem('pss.ceiling') || '', 10);
+      if(v > 0) this.learned = Math.max(8, Math.min(ceiling, v));
+    }catch(e){}
+    this.ceiling = Math.min(ceiling, this.learned || 40);
     this.okStreak = 0; this.recentErr = 0; this.throttled = 0; this.serverErrors = 0;
+  },
+  /* The right in-flight number is not a constant, it is whatever keeps the
+     admission rate at the quota given how long a call currently takes:
+     concurrency = rate x latency. At 230/min and 20s per call that is 76; if
+     Google speeds up to 12s it is 46, and holding 76 would just burn quota on
+     429s. Deriving it converges in a handful of calls instead of creeping. */
+  target(){
+    const v = this.lat.slice().sort((a,b) => a - b);
+    if(v.length < 6) return null;
+    const med = v[Math.floor(v.length / 2)] / 1000;
+    return Math.round(this.perMinute * med / 60);
+  },
+  remember(){
+    try{ localStorage.setItem('pss.ceiling', String(this.ceiling)); }catch(e){}
   },
   async acquire(){
     while(true){
@@ -2078,16 +2290,20 @@ const limiter = {
       await sleep(Math.min(wait, 1500));
     }
   },
-  release(ok){
+  release(ok, ms){
     this.inFlight = Math.max(0, this.inFlight - 1);
-    if(ok){
-      this.okStreak++;
-      // creep the ceiling back up once the backend is clearly coping again
-      if(this.okStreak >= 8 && this.ceiling < this.maxCeiling){
-        this.okStreak = 0;
-        this.ceiling = Math.min(this.maxCeiling, Math.ceil(this.ceiling * 1.4));
-      }
-    }
+    if(!ok) return;
+    if(ms > 0){ this.lat.push(ms); if(this.lat.length > 40) this.lat.shift(); }
+    this.okStreak++;
+    if(this.okStreak < 4 || this.ceiling >= this.maxCeiling) return;
+    this.okStreak = 0;
+    const want = this.target();
+    /* Climb toward the derived target quickly, but never more than half again
+       in one step: the backend's real capacity is smaller than the quota and
+       overshooting it costs a round of 500s to discover. */
+    const cap = Math.ceil(this.ceiling * 1.5);
+    const next = want == null ? Math.ceil(this.ceiling * 1.4) : Math.min(want, cap);
+    this.ceiling = Math.max(this.ceiling, Math.min(this.maxCeiling, next));
   },
   /* kind: 'rate' for 429, 'server' for 5xx */
   backoff(kind){
@@ -2131,9 +2347,10 @@ async function psiRun(url, strategy, key, categories){
     await limiter.acquire();
     let released = false;
     try{
+      const started = Date.now();
       const r = await fetch(endpoint, { method:'GET' });
       const json = await r.json().catch(() => null);
-      limiter.release(r.ok); released = true;
+      limiter.release(r.ok, Date.now() - started); released = true;
 
       if(r.ok){
         if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
@@ -2232,7 +2449,10 @@ async function runTest(){
     if(!f) return;
     const bits = [];
     if(limiter.inFlight) bits.push(limiter.inFlight + ' in flight');
-    if(limiter.ceiling < limiter.maxCeiling) bits.push('ceiling ' + limiter.ceiling);
+    if(limiter.ceiling < limiter.maxCeiling){
+      const want = limiter.target();
+      bits.push('ceiling ' + limiter.ceiling + (want && want > limiter.ceiling ? ' \u2192 ' + Math.min(want, limiter.maxCeiling) : ''));
+    }
     f.textContent = bits.join(' · ');
   }, 400);
 
@@ -2314,10 +2534,19 @@ async function runTest(){
       renderResults();
     });
 
+    if(sweep === 0){
+      /* Remember the ceiling the first pass settled on, not whatever the slow
+         retry sweeps drop it to, so the next run starts from a real number. */
+      limiter.remember();
+      state.timing = Object.assign(state.timing || {}, { peakCeiling: limiter.ceiling });
+    }
     pending = passResults.filter(r => !r.ok && isRetryableMessage(r.error || '')).map(r => r.item);
     sweep++;
   }
 
+  state.timing = Object.assign(state.timing || {},
+    { measureMs: Date.now() - t0, calls: totalJobs });
+  renderLedger();
   state.running = false;
   clearInterval(ticker);
   const f = $('#inFlight'); if(f) f.textContent = '';
@@ -5591,8 +5820,9 @@ function renumberSites(){
 })();
 
 /* --- discovery ----------------------------------------------------------- */
-async function discoverAll(origins){
+async function discoverAll(origins, sweepThrough){
   const btn = $('#discoverBtn'); btn.disabled = true; btn.textContent = 'Searching…';
+  $('#sweepBtn').disabled = true;
   state.cancel = false;
   $('#stopDiscover').classList.remove('hidden');
   $('#discCard').classList.remove('hidden');
@@ -5602,16 +5832,55 @@ async function discoverAll(origins){
 
   const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30),
                  budgetMs: clampInt($('#budget') ? $('#budget').value : 90, 20, 600, 90) * 1000 };
+
+  /* Sites are independent: different hosts, different sitemaps, different
+     proxies. Running them one after another meant a four-site sweep paid four
+     budgets end to end before a single PageSpeed call went out. Each site now
+     gets its own transport context and its own block in the log, so they can
+     run together and the output still reads one site at a time. */
+  const t0 = Date.now();
+  const panes = origins.map(origin => {
+    const box = el('div', 'sitelog');
+    if(origins.length > 1){
+      const h = el('span', 'ok', '=== ' + hostLabel(origin) + ' ===\n');
+      box.appendChild(h);
+    }
+    log.appendChild(box);
+    return box;
+  });
+
+  const perSite = new Array(origins.length);
+  const siteConc = Math.min(origins.length,
+    opts.allowProxy ? CONC.sites : CONC.sitesDirect);
+  if(origins.length > 1)
+    $('#discStat').textContent = 'searching ' + origins.length + ' sites, ' + siteConc + ' at a time';
+
+  await mapLimit(origins, siteConc, async (origin, i) => {
+    const pane = panes[i];
+    const ctx = newCtx(opts.allowProxy);
+    const started = Date.now();
+    let res;
+    try{ res = await discover(origin, opts, pane, ctx); }
+    catch(e){
+      res = { urls: [], sitemaps: [], ok: false };
+      logLine(pane, 'Discovery error: ' + e.message, 'bad');
+    }
+    /* Stack detection is another fetch of the same homepage through the same
+       transport, and nothing downstream of discovery waits on it, so it runs
+       inside the site's own lane rather than after every site has finished. */
+    const stack = await detectStack(origin, pane, ctx);
+    perSite[i] = { origin, res, ctx, stack, ms: Date.now() - started };
+    logLine(pane, '  done in ' + fmtSecs(Date.now() - started), 'dim');
+  });
+
+  const discoverMs = Date.now() - t0;
   const sites = [];
   const notes = [];
 
   for(let i = 0; i < origins.length; i++){
-    const origin = origins[i];
-    transport = null;                       // each site negotiates its own transport
-    if(origins.length > 1) logLine(log, (i ? '\n' : '') + '=== ' + hostLabel(origin) + ' ===', 'ok');
-    let res;
-    try{ res = await discover(origin, opts, log); }
-    catch(e){ res = { urls: [], sitemaps: [], ok: false }; logLine(log, 'Discovery error: ' + e.message, 'bad'); }
+    const rec = perSite[i];
+    if(!rec) continue;
+    const { origin, res, ctx, stack } = rec;
 
     /* A manual list only makes sense for a single-site run; with several sites it
        would be ambiguous which site the pasted URLs belong to. */
@@ -5636,7 +5905,7 @@ async function discoverAll(origins){
       } else {
         why = 'published no sitemap at robots.txt or any of the 22 common paths';
       }
-      logLine(log, '  ' + hostLabel(origin) + ' ' + why, 'bad');
+      logLine(panes[i], '  ' + hostLabel(origin) + ' ' + why, 'bad');
       notes.push('<b>' + esc(hostLabel(origin)) + '</b> ' + esc(why));
       continue;
     }
@@ -5648,17 +5917,21 @@ async function discoverAll(origins){
         ' could not be fetched, so this inventory is incomplete. Sampling proceeded on the ' +
         items.length + ' URLs that were readable.');
     }
-    logLine(log, '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
+    logLine(panes[i], '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
       (manual.length ? ' (including ' + manual.length + ' manual)' : ''), 'ok');
-    const stack = await detectStack(origin, log);
     sites.push({
       origin, label: hostLabel(origin), primary: sites.length === 0,
       items, groups: [], sitemaps: res.sitemaps, stack,
-      transport: transport ? transport.name : 'direct'
+      discoverMs: rec.ms,
+      transport: ctx.tp ? ctx.tp.name : 'direct'
     });
   }
+  const slowest = perSite.filter(Boolean).sort((a,b) => b.ms - a.ms)[0];
+  state.timing = { discoverMs, discoverStarted: t0,
+    slowestSite: slowest ? { label: hostLabel(slowest.origin), ms: slowest.ms } : null };
 
-  btn.disabled = false; btn.textContent = 'Find sitemaps and sample URLs';
+  btn.disabled = false; btn.textContent = 'Find sitemaps only';
+  $('#sweepBtn').disabled = false;
   $('#stopDiscover').classList.add('hidden');
   state.cancel = false;
 
@@ -5681,10 +5954,41 @@ async function discoverAll(origins){
   $('#discSummary').innerHTML = html;
 
   buildGroupsAndSample();
-  $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
+  renderLedger();
+
+  /* Sweep mode: the sample is fully determined by the settings above, so there
+     is nothing for a person to decide between discovery and measurement, and
+     stopping to ask was costing the run the length of a coffee break. */
+  if(sweepThrough && !state.cancel){
+    $('#resCard').classList.remove('hidden');
+    $('#resCard').scrollIntoView({ behavior:'smooth', block:'start' });
+    await runTest().catch(e => {
+      $('#runErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>';
+      state.running = false; $('#runBtn').disabled = false; $('#stopBtn').disabled = true;
+    });
+  } else {
+    $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
+  }
 }
 
-$('#discoverBtn').addEventListener('click', () => {
+/* Without a per-phase clock there is no way to tell whether a change made the
+   run faster or just moved the waiting somewhere less visible. */
+function renderLedger(){
+  const node = $('#ledger');
+  if(!node) return;
+  const t = state.timing || {};
+  const bits = [];
+  if(t.discoverMs != null) bits.push('<b>discovery</b> ' + fmtSecs(t.discoverMs));
+  if(t.slowestSite) bits.push('<b>slowest site</b> ' + esc(t.slowestSite.label) + ' ' + fmtSecs(t.slowestSite.ms));
+  if(t.measureMs != null) bits.push('<b>measure</b> ' + fmtSecs(t.measureMs));
+  if(t.measureMs != null && t.calls) bits.push('<b>throughput</b> ' + (t.calls / (t.measureMs / 60000)).toFixed(0) + ' calls/min');
+  if(t.peakCeiling) bits.push('<b>peak concurrency</b> ' + t.peakCeiling);
+  if(t.discoverMs != null && t.measureMs != null) bits.push('<b>total</b> ' + fmtSecs(t.discoverMs + t.measureMs));
+  node.innerHTML = bits.length ? bits.join('') : '';
+  node.className = 'ledger';
+}
+
+function startFromSetup(sweepThrough){
   $('#setupErr').innerHTML = '';
   const raw = siteValues();
   const origins = uniq(raw.map(originOf).filter(Boolean));
@@ -5695,8 +5999,10 @@ $('#discoverBtn').addEventListener('click', () => {
   // normalise what is shown back to the user
   siteInputs().forEach((inp, i) => { if(origins[i]) inp.value = origins[i]; });
   saveSites();
-  discoverAll(origins);
-});
+  discoverAll(origins, sweepThrough);
+}
+$('#discoverBtn').addEventListener('click', () => startFromSetup(false));
+$('#sweepBtn').addEventListener('click', () => startFromSetup(true));
 
 $('#stopDiscover').addEventListener('click', () => {
   state.cancel = true;
@@ -5713,7 +6019,12 @@ $('#manualOnlyBtn').addEventListener('click', () => {
   $('#discCard').classList.add('hidden');
   state.sites = [{ origin, label: hostLabel(origin), primary: true, items, groups: [], sitemaps: [], transport: 'manual', stack: null }];
   buildGroupsAndSample();
-  detectStack(origin, null).then(st => { state.sites[0].stack = st; renderResults(); });
+  (async () => {
+    const ctx = newCtx($('#useProxy').checked);
+    await probeTransport(origin, $('#useProxy').checked, null, ctx).catch(() => null);
+    const st = await detectStack(origin, null, ctx);
+    state.sites[0].stack = st; renderResults();
+  })();
   $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
 });
 

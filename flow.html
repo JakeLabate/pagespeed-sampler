@@ -139,24 +139,34 @@ li{margin-bottom:6px}
 <h2>Phase 1 · Discover</h2>
 <div class="phase">
 
+<h3><span class="n">1.0</span>Run every site at once</h3>
+<p>Sites are independent: different hosts, different sitemaps, different proxies. Each gets its own transport context, so a four-site sweep discovers all four together and pays roughly one site's wall clock instead of four. Each site keeps its own block in the log so concurrent output still reads one site at a time.</p>
+<p>Up to <b>4 sites at a time</b> when proxies are in play, 6 when every site allows direct access.</p>
+
 <h3><span class="n">1.1</span>Negotiate a transport, once per site</h3>
 <p>A browser cannot read another site's <code>robots.txt</code> unless that site sends CORS headers, and most do not. Rather than pay a fallback chain on every request, the app probes once per site and remembers the winner.</p>
-<p>It tries <code>/robots.txt</code>, then <code>/</code>, through each transport in turn: direct fetch first, then allorigins, codetabs, corsproxy.io, isomorphic-git, thingproxy. The first that returns a body wins and every later request for that site uses it.</p>
+<p>All six transports are raced against <code>/robots.txt</code> at once rather than tried in turn, so a site behind a slow proxy no longer pays six sequential timeouts before discovery starts. Direct fetch gets a <b>1.2 second head start</b> and, if a proxy answers first, another <b>0.8 seconds</b> of grace: direct is faster and it is the only transport that does not hand every audited URL to a third party, so it wins whenever it works at all.</p>
+<p>The probe keeps the body. <code>robots.txt</code> is both the probe target and the first thing discovery needs, so fetching it twice was a wasted round trip per site.</p>
 <div class="fail"><b>If every transport fails:</b> the site is reported as unreachable and skipped. Other sites in the run continue. Proxies can be switched off entirely, in which case only sites that permit direct access are reachable.</div>
-<p>Public proxies rate-limit, so a proxied run opens fewer connections and waits longer: 2 concurrent instead of 5 on the sitemap walk, 3 instead of 6 on the path probe, and a 35 second window instead of 20. A timed-out request means slow, not blocked, so it is not retried through a different proxy; that only adds load.</p>
+
+<h3><span class="n">1.1b</span>Hedge, and let proxies earn their place</h3>
+<p>Sequential fallback means the slowest proxy sets the wall clock: you wait a full timeout to learn nothing, then start over somewhere else. Instead a second transport is started while the first is still outstanding and whichever answers first wins, so a stalled proxy costs the hedge delay rather than the timeout.</p>
+<p>The probe winner starts as the only proxy in the rotation. An alternate joins it by actually answering, and <b>three failures drops it</b> for the rest of that site. Sitemap concurrency then follows how many proxies are genuinely working, at 3 requests per working proxy: spreading load helps only while they all work, and rotating onto one that is stalling just moves the stall around.</p>
+<p>Proxy latency and failure rates are scored, shared across every site in the run, and kept in <code>localStorage</code> between runs, so the ordering starts from whatever was actually fast last time instead of relearning it each run.</p>
 
 <h3><span class="n">1.2</span>Find the sitemap</h3>
-<p><code>robots.txt</code> is checked first for a <code>Sitemap:</code> directive, which is authoritative when present. If there is none, 22 common paths are probed <b>in parallel</b>, six at a time:</p>
+<p><code>robots.txt</code> is checked first for a <code>Sitemap:</code> directive, which is authoritative when present. If there is none, 22 common paths are probed <b>in parallel</b>, 10 at a time through a proxy and 14 direct:</p>
 <p><code>/sitemap.xml</code> <code>/sitemap_index.xml</code> <code>/sitemap-index.xml</code> <code>/sitemap/sitemap.xml</code> <code>/wp-sitemap.xml</code> <code>/sitemap-0.xml</code> <code>/sitemap1.xml</code> <code>/sitemaps/sitemap.xml</code> <code>/sitemap/index.xml</code> <code>/sitemap.php</code> <code>/sitemap.txt</code> <code>/sitemapindex.xml</code> <code>/page-sitemap.xml</code> <code>/post-sitemap.xml</code> <code>/product-sitemap.xml</code> <code>/sitemap/</code> <code>/sitemap-pages.xml</code> <code>/sitemap_pages.xml</code> <code>/xmlsitemap.xml</code> <code>/sitemap/sitemap-index.xml</code> <code>/api/sitemap.xml</code> <code>/server-sitemap.xml</code></p>
 <p>Where several hit, an index beats a leaf urlset, then the shallowest path wins.</p>
 
 <h3><span class="n">1.3</span>Walk it</h3>
 <p>A <code>&lt;sitemapindex&gt;</code> is walked breadth-first into its children, to a depth of five and a default ceiling of 30 child sitemaps. Plain-text sitemaps are parsed too. Gzipped sitemaps are skipped, because a browser cannot decompress them from <code>fetch</code>.</p>
-<p>The parallel pass fails fast. Any child that timed out is then retried <b>one at a time with a 45 second window</b>, up to eight of them, because a batch of timeouts usually means the proxy was saturated rather than the files being absent. Recovered children rejoin the inventory.</p>
+<p>The parallel pass fails fast at 16 seconds. Any child that timed out is then swept again <b>through different proxies, four at a time</b>, because a batch of timeouts usually means the proxy was saturated rather than the files being absent. Recovered children rejoin the inventory.</p>
+<p>A <b>wall-clock budget</b> (90 seconds by default, adjustable) bounds the whole walk, checked per sitemap rather than per depth level so a single index handing back twelve children cannot run past it. Whatever was collected when the budget expires is used.</p>
 <div class="fail"><b>If children fail permanently:</b> the site is reported as having <em>published a sitemap whose children timed out</em>, not as having published none. Those are different problems and pointed at different fixes. Where some children succeed, sampling proceeds on what was readable and the summary says the inventory is incomplete.</div>
 
 <h3><span class="n">1.4</span>Detect the stack</h3>
-<p>The homepage is fetched on the same transport and fingerprinted: 20 platforms, 8 image CDNs, the <code>generator</code> meta tag, and on WordPress the installed plugin and theme slugs read out of asset paths. This is a side input; it changes what phase 5 says, not what gets measured.</p>
+<p>This runs inside the site's own lane rather than after every site has finished, since nothing downstream of discovery waits on it. The homepage is fetched on the same transport and fingerprinted: 20 platforms, 8 image CDNs, the <code>generator</code> meta tag, and on WordPress the installed plugin and theme slugs read out of asset paths. This is a side input; it changes what phase 5 says, not what gets measured.</p>
 </div>
 
 <h2>Phase 2 · Shape</h2>
@@ -199,7 +209,8 @@ li{margin-bottom:6px}
 <p>The 240-queries-per-minute quota is not the binding constraint. Each call holds a Lighthouse run on Google's side for 10 to 30 seconds, and one project's share of that pool is far narrower than 240. Firing 200 at once saturates it and the overflow returns <code>500 ERRORED_DOCUMENT_REQUEST</code>, not <code>429</code>.</p>
 <p>So concurrency is discovered rather than declared:</p>
 <ul>
-<li>Opens at <b>40 in flight</b> and climbs 1.4× every 8 consecutive successes toward the chosen batch width.</li>
+<li>The right in-flight number is not a constant, it is whatever holds the admission rate at the quota given how long a call currently takes: <b>concurrency = rate × latency</b>. At 230 a minute and 20 seconds a call that is 76; if Google speeds up to 12 seconds it is 46, and holding 76 would just buy 429s. A rolling median of the last 40 successful calls sets the target, and the ceiling climbs toward it in steps of at most 1.5×.</li>
+<li>Opens at the ceiling the <b>last run settled on</b>, carried in <code>localStorage</code>, rather than relearning the same number from 40 every time.</li>
 <li><b>Halves the ceiling</b> after 3 clustered errors, floor of 5, then climbs again. Additive increase, multiplicative decrease.</li>
 <li>A <code>429</code> pauses the whole batch 7 seconds; a cluster of 5xx pauses it 3.</li>
 <li>A rolling 230-per-minute admission guard sits underneath all of it.</li>

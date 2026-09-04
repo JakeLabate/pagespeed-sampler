@@ -354,6 +354,55 @@ then red, applied in that order so the first match wins. Header rows are frozen,
 carry a filter, rows are banded, and print setup is fit-to-width with repeating header
 rows.
 
+## Speed
+
+A sweep is a pipeline, and its wall clock is set by whichever lane is serial. Four lanes
+were, and each is now parallel with a stated ceiling.
+
+**Sites discover together.** Sites are independent: different hosts, different sitemaps,
+different proxies. They used to share one module-level transport, which is the only
+reason they had to run one after another, so a four-site sweep paid four discovery
+budgets end to end before a single PageSpeed call went out. Each site now carries its own
+transport context and its own block in the log, and up to 4 run at once (6 when every
+site allows direct access).
+
+**Transports are raced, not tried in turn.** All six are fired at `/robots.txt`
+simultaneously. Direct fetch gets a 1.2 second head start and 0.8 seconds of grace if a
+proxy answers first, because direct is faster and is the only transport that does not
+hand every audited URL to a third party. The probe keeps the body, so `robots.txt` is not
+fetched twice.
+
+**Slow requests are hedged.** Sequential fallback lets the slowest proxy set the wall
+clock: you wait a full timeout to learn nothing, then start again somewhere else. A
+second transport is now started while the first is still outstanding and whichever
+answers first wins, so a stalled proxy costs the hedge delay instead of the timeout.
+
+**Proxies earn their place.** The probe winner starts as the only proxy in the rotation.
+An alternate joins by answering, and three failures drops it for that site. Sitemap
+concurrency follows how many are genuinely working, at 3 requests per working proxy.
+Latency and failure scores are shared across sites and kept between runs in
+`localStorage`, so ordering starts from what was actually fast last time.
+
+**Sweep mode removes the human gate.** The sample is fully determined by the settings, so
+**Run the whole sweep** goes from URLs to finished results without stopping to be told to
+continue. **Find sitemaps only** keeps the old behaviour when you want to inspect or edit
+the sample first.
+
+**Every phase is clocked.** A ledger under the progress bar reports discovery time, the
+slowest site, measurement time, throughput in calls per minute, peak concurrency and the
+total. Without it there is no way to tell whether a change made a run faster or just
+moved the waiting somewhere less visible.
+
+Measured on a three-site mock with 900 ms of latency per request:
+
+| | before | after |
+|---|---|---|
+| discovery | 11.4 s | 3.2 s |
+| end to end | 17.9 s | 8.9 s |
+
+And on a site whose winning proxy stalls partway through a ten-child sitemap index:
+39.1 s for 72 URLs and 4 lost children, against 3.4 s for all 123 URLs and none lost.
+
 ## Concurrency
 
 The 240-queries-per-minute project quota is not the binding constraint. Each PSI call
@@ -365,8 +414,13 @@ slower and more expensive than it looks.
 
 So the runner treats concurrency as something to discover rather than declare:
 
-- Opens at **40 in flight** and climbs 1.4x every 8 consecutive successes, up to the
-  batching width you picked.
+- The right in-flight number is not a constant, it is whatever holds the admission rate
+  at the quota given how long a call currently takes: **concurrency = rate x latency**.
+  At 230/min and 20 s a call that is 76; if Google speeds up to 12 s it is 46, and holding
+  76 would just buy 429s. A rolling median of the last 40 successful calls sets the
+  target, and the ceiling climbs toward it in steps of at most 1.5x.
+- Opens at the ceiling the **last run settled on**, carried in `localStorage`, instead of
+  relearning the same number from 40 on every run.
 - **Halves the ceiling** after 3 clustered errors, down to a floor of 5, then climbs
   again. Additive increase, multiplicative decrease.
 - A **429 pauses the entire batch** for 7 seconds. A cluster of 5xx pauses it for 3.
@@ -394,9 +448,10 @@ The key is stored in `localStorage` in your own browser and is sent only to
 
 Browsers cannot read a cross-origin `sitemap.xml` unless the site sends
 `Access-Control-Allow-Origin`. Most sites do not. The app tries a direct fetch first and
-falls back to a public CORS proxy (allorigins, codetabs, corsproxy.io, isomorphic-git)
-only when direct access is blocked. It probes once per site to pick a working transport
-instead of paying the fallback chain on every request.
+falls back to a public CORS proxy (allorigins, codetabs, corsproxy.io, isomorphic-git,
+thingproxy) only when direct access is blocked. It probes once per site to pick a working
+transport instead of paying the fallback chain on every request, racing all six at once
+and preferring direct whenever it works. See **Speed** above for hedging and rotation.
 
 If every transport fails, paste a URL list into the manual field under
 **Sampling and run options** and press **Use manual list only**. Grouping, sampling and
