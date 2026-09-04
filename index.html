@@ -191,6 +191,8 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .cmpgroup > summary:before{content:"▸ ";color:var(--muted)}
 .cmpgroup[open] > summary:before{content:"▾ "}
 .chartgrid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-bottom:14px}
+.chartgrid.two{grid-template-columns:1fr}
+@media(min-width:900px){.chartgrid.two{grid-template-columns:1.35fr 1fr;align-items:start}}
 .chartcard{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 16px 12px}
 .chartcard.wide{margin-bottom:6px}
 .chartcard .ctitle{font-size:12px;font-weight:640;color:var(--ink-2);margin-bottom:6px}
@@ -1902,14 +1904,18 @@ function chartsSection(rows){
   const h = el('h3','', 'Profile');
   h.setAttribute('style','margin:26px 0 4px');
   wrap.appendChild(h);
-  const p = el('p','hint','Each axis is that metric scored against Google\'s own thresholds, not against the other sites in this run, so a site\'s shape stays the same whoever else is measured alongside it. 90 is the good boundary, 50 the needs-work boundary. Further out is better on every axis.');
+  const p = el('p','hint','Every metric scored against Google\'s own thresholds, not against the other sites in this run, so a score stays the same whoever else is measured alongside it. 90 is the good boundary, 50 the needs-work boundary; higher is better throughout. The two charts carry identical numbers: read values off the left, read shape off the right.');
   p.setAttribute('style','margin:0 0 14px');
   wrap.appendChild(p);
 
-  const grid = el('div','chartgrid');
+  const grid = el('div','chartgrid two');
+  grid.appendChild(chartCard('By metric', svgDotPlot(series, { theme: th, width: 560 }),
+    series.length > 1 ? series.slice(0,3).map((sv, i) =>
+      '<span class="lg"><i style="background:' + th.series[i] + '"></i>' + esc(sv.label) + '</span>').join('') : '',
+    'wide'));
   if(series.length <= 3){
     const { svg, legend } = svgRadar(series, { theme: th, size: 340 });
-    grid.appendChild(chartCard(series.length > 1 ? 'Normalised profile' : series[0].label, svg, legend, 'radar'));
+    grid.appendChild(chartCard(series.length > 1 ? 'Same numbers, as a shape' : series[0].label, svg, legend, 'radar'));
   } else {
     /* Four sites cannot share one radar: a fourth hue fails the all-pairs colour
        gates, and four overlapping polygons are unreadable regardless. Small
@@ -2308,6 +2314,76 @@ function svgBars(rows, opts){
   });
   return '<svg viewBox="0 0 ' + o.width + ' ' + H + '" width="100%" role="img" aria-label="' +
     xesc(o.title || 'Ranked comparison') + '">' + g + '</svg>';
+}
+
+/* ---- dot plot by metric ------------------------------------------------- */
+/* The analytical counterpart to the radar: the same normalised numbers, but on
+   one shared linear axis. Position on a common scale is the most accurately read
+   visual encoding there is, and unlike a radar nothing here depends on the order
+   the metrics happen to be listed in. */
+function svgDotPlot(series, opts){
+  const o = Object.assign({ width: 620, theme: THEME_LIGHT, labelW: 108, rowH: 34 }, opts || {});
+  const th = o.theme;
+  const axes = RADAR_AXES;
+  const H = axes.length * o.rowH + 30;
+  const plotW = o.width - o.labelW - 34;
+  const x = v => o.labelW + (Math.max(0, Math.min(100, v)) / 100) * plotW;
+  let g = '';
+
+  // the three score bands, same visual language as the spread chart
+  [[0, 50, th.bad], [50, 90, th.warn], [90, 100, th.good]].forEach(([a, b, c]) => {
+    g += '<rect x="' + nn(x(a)) + '" y="4" width="' + nn(x(b) - x(a)) + '" height="' + (H - 30) +
+         '" fill="' + c + '" opacity="0.055"/>';
+  });
+  [0, 50, 90, 100].forEach(v => {
+    g += '<line x1="' + nn(x(v)) + '" y1="4" x2="' + nn(x(v)) + '" y2="' + (H - 26) +
+         '" stroke="' + th.grid + '" stroke-width="1"/>';
+    g += '<text x="' + nn(x(v)) + '" y="' + (H - 12) + '" text-anchor="middle" fill="' + th.muted +
+         '" font-size="9" font-family="ui-monospace,monospace">' + v + '</text>';
+  });
+
+  axes.forEach((k, ri) => {
+    const y = ri * o.rowH + 22;
+    g += '<text x="0" y="' + (y + 4) + '" fill="' + th.ink2 + '" font-size="10.5" font-weight="600">' +
+         xesc(METRICS[k].label) + '</text>';
+    const pts = series.slice(0, 3).map((s, si) => ({ si, label: s.label, v: s.values[k] }))
+                      .filter(p => p.v != null);
+    if(!pts.length) return;
+    // a connector makes the gap between the best and worst site readable at a glance
+    if(pts.length > 1){
+      const lo = Math.min(...pts.map(p => p.v)), hi = Math.max(...pts.map(p => p.v));
+      g += '<line x1="' + nn(x(lo)) + '" y1="' + y + '" x2="' + nn(x(hi)) + '" y2="' + y +
+           '" stroke="' + th.axis + '" stroke-width="2" stroke-linecap="round" opacity="0.45"/>';
+    }
+    pts.forEach(p => {
+      g += '<circle cx="' + nn(x(p.v)) + '" cy="' + y + '" r="5" fill="' + th.series[p.si] +
+           '" stroke="' + th.surface + '" stroke-width="2"/>';
+    });
+    // label the extremes only, never every point
+    const sorted = pts.slice().sort((a, b) => a.v - b.v);
+    const ends = pts.length > 1 ? [sorted[0], sorted[sorted.length - 1]] : [sorted[0]];
+    ends.forEach((p, i) => {
+      const left = (i === 0 && pts.length > 1);
+      g += '<text x="' + nn(x(p.v) + (left ? -10 : 10)) + '" y="' + (y + 4) +
+           '" text-anchor="' + (left ? 'end' : 'start') + '" fill="' + th.ink +
+           '" font-size="10" font-weight="700" font-family="ui-monospace,monospace">' + Math.round(p.v) + '</text>';
+    });
+  });
+
+  if(o.inlineLegend && series.length){
+    const items = series.slice(0, 3);
+    const perItem = Math.min(140, (o.width - 20) / items.length);
+    let lx = (o.width - perItem * items.length) / 2, ly = H + 12;
+    items.forEach((sv, si) => {
+      g += '<rect x="' + nn(lx) + '" y="' + (ly - 7) + '" width="9" height="9" rx="2" fill="' + th.series[si] + '"/>';
+      g += '<text x="' + nn(lx + 13) + '" y="' + (ly + 1) + '" fill="' + th.ink2 + '" font-size="9">' +
+           xesc(sv.label) + '</text>';
+      lx += perItem;
+    });
+  }
+  const vbH = H + (o.inlineLegend ? 20 : 0);
+  return '<svg viewBox="0 0 ' + o.width + ' ' + vbH + '" width="100%" role="img" aria-label="' +
+    xesc('Normalised score by metric for ' + series.map(s => s.label).join(', ')) + '">' + g + '</svg>';
 }
 
 /* ---- per-page score distribution ---------------------------------------- */
@@ -3002,6 +3078,10 @@ function buildReportModel(){
   const cs = chartSet(primaryRows, state.sites);
   const charts = [];
   if(cs.series.length){
+    charts.push({ key:'dots', title:'Score by metric, ' + strategies[0],
+      note:'Every metric scored 0 to 100 against Google\'s thresholds. Position on a shared scale, so values can be read directly. The connector shows the gap between the best and worst site on that metric.',
+      svg: svgDotPlot(cs.series, { theme: THEME_LIGHT, width: 620, inlineLegend: cs.series.length > 1 }),
+      w: 620, h: RADAR_AXES.length * 34 + 30 + (cs.series.length > 1 ? 20 : 0), data: cs.series });
     if(cs.series.length <= 3){
       charts.push({ key:'radar', title:'Normalised profile, ' + strategies[0],
         note:'Each axis scores that metric against Google\'s thresholds, not against the other sites measured, so a profile does not change when a competitor is added. Further from the centre is better. Outer dashed ring is the good boundary, inner is needs work.',
@@ -3455,7 +3535,7 @@ function renderReportHTML(m){
         return [col.label, fmt(col.key, v), GRADE_LABEL[grade(col.key, v)]];
       })));
 
-  sec('Profile', 'The shape of the result, and what the averages conceal.',
+  sec('Profile', 'Where the sites differ, and what the averages conceal.',
     (function(){
       const series = radarSeriesFor(m.c.rows, m.c.sites.length > 1 ? m.c.sites : []);
       const groups = (m.c.sites.length > 1
@@ -3464,7 +3544,13 @@ function renderReportHTML(m){
       let out = '';
       if(series.length){
         const many = series.length > 3;
-        out += '<p>Each axis scores that metric against Google\'s published thresholds rather than against the other sites measured, so a profile belongs to the site and does not change when a competitor is added or removed. Further from the centre is better on every axis. The outer dashed ring is the good boundary, the inner one the needs-work boundary.</p>';
+        out += '<p>Every metric is scored 0 to 100 against Google\'s published thresholds rather than against the other sites measured, so a score belongs to the site and does not change when a competitor is added or removed. 90 is the good boundary and 50 the needs-work boundary; higher is better on every metric. The connector marks the gap between the best and worst site on that row.</p>';
+        out += '<figure class="chart wide"><figcaption>Score by metric</figcaption>' +
+          svgDotPlot(series, { theme: THEME_LIGHT, width: 600 }) +
+          (series.length > 1 ? '<div class="chartkey">' + series.slice(0,3).map((x, i) =>
+            '<span><i style="background:' + SERIES_LIGHT[i] + '"></i>' + esc(x.label) + '</span>').join('') + '</div>' : '') +
+          '</figure>';
+        out += '<h3>The same numbers as a shape</h3><p>A radar is read for profile, not for value. Its area grows with the square of the radius, so it overstates differences, and the outline depends on the order the axes happen to be listed in. It is included because the shape of a weakness is quick to recognise, not because it is the more accurate of the two. Read values off the chart above; read shape off this one. The outer dashed ring is the good boundary, the inner one needs work.</p>';
         out += '<div class="charts">' + (many
           ? series.map(x => '<figure class="chart small"><figcaption>' + esc(x.label) + '</figcaption>' +
               svgRadar([x], { theme: THEME_LIGHT, size: 230 }).svg + '</figure>').join('')

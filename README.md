@@ -66,15 +66,25 @@ The same three charts appear in the app, the document, the Excel workbook and th
 Sheet. They are drawn once as SVG string builders with no library, so the app, the print
 document and the rasteriser all render identical output.
 
-**Radar (star) profile.** Seven metrics per site on one polygon. The scoring is anchored
+**Dot plot by metric.** The default analytical view. Seven metrics on one shared 0 to
+100 scale, a dot per site, with a connector marking the gap between best and worst on
+each row and the extremes direct-labelled. Position on a common scale is the most
+accurately read encoding there is, and nothing about it depends on the order the metrics
+are listed in.
+
+**Radar (star) profile.** The same numbers as a shape. Seven metrics per site on one
+polygon. The scoring is anchored
 to Google's thresholds, never to the range of sites in the run: min-max scaling would
 mean adding a competitor silently redraws everyone else's shape, so a profile would
 belong to the comparison set rather than to the site. 100 is at or better than good, 90
 is the good boundary, 50 is needs-work. Further from the centre is better on every axis.
 
-A radar is a weak form for reading exact values, which is why a table of the same
-numbers ships beside it every time. It is a strong form for reading *shape*, which is
-what a competitive comparison actually needs, and that is the job it is doing here.
+A radar is a weak form for reading exact values: its area grows with the square of the
+radius so it overstates differences, and the outline changes if the axes are reordered,
+which is a decision with no meaning behind it. It is kept because recognising the *shape*
+of a weakness is fast and it does real work in a client conversation, not because it is
+the more accurate of the two. The dot plot leads; the radar sits beside it; a table of
+the same numbers ships with both.
 
 Capped at three overlaid polygons. Four sites render as small multiples instead, because
 a fourth categorical hue fails the all-pairs colour separation checks the first three
