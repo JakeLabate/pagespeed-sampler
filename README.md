@@ -60,6 +60,51 @@ one on a single page.
 The LCP element parser walks the audit details tree rather than indexing a fixed path,
 because the node moved between Lighthouse versions and will move again.
 
+## The deterministic report
+
+The workbook is the data. The **Report** button produces the document you hand a
+stakeholder: a self-contained, print-ready HTML file that opens and prints to PDF from
+the browser.
+
+Nothing in it is written by a language model, and nothing is written by hand at
+generation time. A fixed rule set is applied to the measurements. Each rule declares a
+condition, a severity, a fix risk, an effort level, an evidence set and a fix, and its
+prose is a template filled from the same numbers its evidence table shows, so the
+narrative and the data cannot disagree.
+
+**Determinism** is the point. The only input that varies between two runs on the same
+measurements is the report date, which is an explicit field rather than a call to the
+clock. The app prints the SHA-256 of the generated document; regenerating from the same
+measurements and the same date reproduces that hash exactly. Verified in the test suite
+by generating twice and asserting byte equality.
+
+### What the rules add over the Opportunities tab
+
+The workbook lists every audit that returned data. The rules decide what counts as a
+finding, which is a different job:
+
+- **Thresholds.** A rule fires or stays silent. A client sees nine findings rather than
+  twenty-four rows.
+- **Severity and fix risk.** Each recommendation carries what it costs to leave alone
+  *and* how likely the fix is to break something, rather than keeping risk in a separate
+  register.
+- **Cross-signal findings.** "The LCP element is an image AND the image audits fire"
+  collapses into one recommendation naming the specific file. A spreadsheet row cannot
+  join two signals. Same for the collection outlier and the competitor gap.
+- **Sequencing.** Now, Next and Later, with server response pinned ahead of front-end
+  work because it caps the benefit of everything after it.
+
+### Sections
+
+Cover, contents, then: Method, Inventory, Findings, What is working, Recommendations,
+Roadmap, Rubric and glossary, and **How this was generated** which lists every rule
+evaluated including those that did not fire, so a silence can be told apart from an
+omission.
+
+Set in the house palette: indigo `#191A3E` and `#2B2C63`, teal `#0E8C8B`, cream
+`#F5F0E6`, Space Grotesk headings, IBM Plex Sans body, IBM Plex Mono for eyebrows and
+labels.
+
 ## Comparing sites
 
 Enter up to four domains. Each is discovered, grouped and sampled on its own, then every

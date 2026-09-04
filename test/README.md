@@ -28,3 +28,11 @@ It checks condition types, dimensions, alignments, wrap strategies, number forma
 merge types and request kinds against allowlists; asserts every `repeatCell` carries
 `fields`; asserts colour channels are 0..1; and asserts every conditional format range
 sits inside its sheet's declared grid.
+
+
+## Determinism
+
+The generated report must be reproducible or it is not defensible in front of a client.
+The test generates it twice from identical measurements with the report date pinned,
+hashes both with SHA-256, and asserts byte equality. It then renders the HTML to PDF
+through Chromium to check that sections flow and cards do not break mid-card.

@@ -286,6 +286,11 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
           <div class="hint">Prefilled with this deployment's client. To point the Sheets export at your own Google Cloud project instead, replace it: create a <b>Web application</b> OAuth client, add <span class="mono" id="originHint"></span> to its authorised JavaScript origins, and paste the ID here. A client ID is a public identifier, not a secret. The Excel export needs none of this.</div>
         </div>
         <div>
+          <label class="f" for="reportDate">Report date</label>
+          <input type="date" id="reportDate">
+          <div class="hint">Pinned rather than read from the clock, so regenerating a report from the same measurements produces byte-identical output.</div>
+        </div>
+        <div>
           <label class="f" for="clientName">Client or project name (report cover)</label>
           <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
           <div class="hint">Appears on the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
@@ -344,6 +349,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
       <button class="btn ghost sm" id="dlJson" type="button">JSON</button>
       <button class="btn ghost sm" id="dlXlsx" type="button">Excel</button>
       <button class="btn sm" id="mkSheet" type="button">Google Sheet</button>
+      <button class="btn sm" id="dlReport" type="button">Report</button>
     </div>
   </div>
   <div id="reportNote"></div>
@@ -382,7 +388,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName','#reportDate'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -2065,6 +2071,306 @@ function failurePanel(failRows, rows, active){
   return d;
 }
 
+/* --------------------------------------------------------------- rules engine */
+/* Every sentence in the generated report comes from one of these rules. A rule
+   fires on a measured condition, and its wording is a template with slots filled
+   from the measurement. No model, no randomness, no wording that is not traceable
+   to a threshold. Same input, same bytes.
+
+   severity  = what it costs if left alone
+   risk      = how likely the fix is to break something, which Jake's audit format
+               attaches to the recommendation rather than keeping a separate register
+   effort    = rough implementation cost                                          */
+
+const SEV_ORDER = { critical: 0, serious: 1, moderate: 2, minor: 3 };
+const r0 = n => Math.round(n);
+const r2 = n => Math.round(n * 100) / 100;
+const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
+
+/* A finding's slot values are computed once so the wording and the evidence
+   table can never disagree. */
+function ctx(rows, sites){
+  const opps = aggregateOpportunities(rows);
+  const byId = new Map(opps.map(o => [o.id, o]));
+  const lcpEls = aggregateLcpElements(rows);
+  const tp = aggregateThirdParty(rows);
+  const n = rows.length;
+  const m = k => mean(rows.map(x => x.data[k]));
+  const collections = new Map();
+  rows.forEach(x => {
+    const k = x.siteLabel + ' /' + x.collection;
+    if(!collections.has(k)) collections.set(k, []);
+    collections.get(k).push(x);
+  });
+  return {
+    rows, sites, n, opp: id => byId.get(id) || null, opps, lcpEls, tp,
+    perf: m('perf'), lcp: m('lcp'), cls: m('cls'), tbt: m('tbt'), ttfb: m('ttfb'), fcp: m('fcp'),
+    collections: Array.from(collections).map(([k, rs]) => ({
+      name: k, pages: rs.length, perf: mean(rs.map(x => x.data.perf)), lcp: mean(rs.map(x => x.data.lcp))
+    })).sort((a, b) => (a.perf - b.perf) || a.name.localeCompare(b.name))
+  };
+}
+
+const RULES = [
+  {
+    id: 'ttfb-origin',
+    when: c => c.ttfb > 800,
+    severity: c => c.ttfb > 1800 ? 'critical' : 'serious',
+    risk: 'medium', effort: 'medium',
+    title: c => 'The origin takes ' + fmtMs(c.ttfb) + ' to respond',
+    thesis: c => 'Server response time is the floor under every other metric on this site.',
+    evidence: c => [
+      ['Mean time to first byte', fmtMs(c.ttfb) + ' across ' + c.n + ' measurements'],
+      ['Good threshold', '800 ms or below'],
+      ['Pages above the threshold', String(c.rows.filter(x => x.data.ttfb > 800).length) + ' of ' + c.n]
+    ],
+    why: 'Nothing rendered by the browser can start before the first byte arrives. Every millisecond here is added to Largest Contentful Paint on every page, so front-end optimisation cannot recover it.',
+    fix: c => [
+      'Put a CDN in front of the origin and cache HTML at the edge where the page allows it.',
+      'Profile the slowest server-rendered templates; a single uncached query is the usual cause.',
+      'Re-measure before doing any image or JavaScript work, because this ceiling caps the benefit of both.'
+    ]
+  },
+  {
+    id: 'lcp-image-unoptimised',
+    when: c => {
+      const img = c.lcpEls.find(e => /img|image|picture|hero|banner/i.test(e.label + ' ' + e.selector + ' ' + e.snippet));
+      return !!img && !!(c.opp('modern-image-formats') || c.opp('uses-responsive-images') || c.opp('uses-optimized-images'));
+    },
+    severity: c => c.lcp > 4000 ? 'critical' : 'serious',
+    risk: 'low', effort: 'low',
+    title: c => {
+      const img = c.lcpEls.find(e => /img|image|picture|hero|banner/i.test(e.label + ' ' + e.selector + ' ' + e.snippet));
+      return 'The LCP element is an unoptimised image on ' + img.pages + ' of ' + c.n + ' measured pages';
+    },
+    thesis: c => 'One image, repeated across templates, is the single largest cause of slow loading here.',
+    evidence: c => {
+      const img = c.lcpEls.find(e => /img|image|picture|hero|banner/i.test(e.label + ' ' + e.selector + ' ' + e.snippet));
+      const fmts = c.opp('modern-image-formats');
+      const resp = c.opp('uses-responsive-images');
+      const out = [
+        ['LCP element', (img.label || img.selector)],
+        ['Selector', img.selector || 'not reported'],
+        ['Pages where it is the LCP element', img.pages + ' of ' + c.n + ' (' + pct(img.pages, c.n) + '%)'],
+        ['Mean LCP on those pages', fmtMs(img.meanLcp)]
+      ];
+      if(fmts) out.push(['Savings from a modern format', fmtBytes(fmts.avgBytes) + ' and ' + fmtMs(fmts.avgMs) + ' a page']);
+      if(resp) out.push(['Savings from correct sizing', fmtBytes(resp.avgBytes) + ' a page']);
+      const biggest = (fmts && fmts.resources[0]) || (resp && resp.resources[0]);
+      if(biggest) out.push(['Largest offending file', biggest.url + ' at ' + fmtBytes(biggest.bytes) + ', on ' + biggest.pages + ' pages']);
+      return out;
+    },
+    why: 'The largest contentful paint is whatever takes longest to appear. When that is one image reused across a template, the fix applies once and the benefit lands on every page using it, which makes this the highest ratio of reach to effort available.',
+    fix: c => [
+      'Re-encode the image as WebP or AVIF with a JPEG fallback.',
+      'Generate width variants and serve them through srcset and sizes so phones stop downloading desktop pixels.',
+      'Preload it and set fetchpriority="high". Never mark it loading="lazy".'
+    ]
+  },
+  {
+    id: 'lcp-lazy',
+    when: c => !!c.opp('lcp-lazy-loaded'),
+    severity: () => 'critical', risk: 'low', effort: 'low',
+    title: c => 'The LCP image is lazy-loaded on ' + c.opp('lcp-lazy-loaded').pages + ' pages',
+    thesis: () => 'A one-attribute mistake is delaying the main image on every affected page.',
+    evidence: c => [['Pages affected', c.opp('lcp-lazy-loaded').pages + ' of ' + c.n],
+                    ['Estimated delay', fmtMs(c.opp('lcp-lazy-loaded').avgMs) + ' a page']],
+    why: 'Lazy-loading defers the request until the browser has laid the page out. For an image already in the viewport that is pure delay, added directly to LCP.',
+    fix: () => ['Remove loading="lazy" from any image above the fold.',
+                'If a CMS applies it globally, exclude the hero or featured-image field.']
+  },
+  {
+    id: 'render-blocking',
+    when: c => { const o = c.opp('render-blocking-resources'); return o && o.avgMs > 250; },
+    severity: c => c.opp('render-blocking-resources').avgMs > 600 ? 'serious' : 'moderate',
+    risk: 'medium', effort: 'medium',
+    title: c => fmtMs(c.opp('render-blocking-resources').avgMs) + ' a page lost to render-blocking resources',
+    thesis: () => 'The browser is being told to wait for files it does not need in order to paint.',
+    evidence: c => {
+      const o = c.opp('render-blocking-resources');
+      return [['Pages affected', o.pages + ' of ' + c.n],
+              ['Mean delay', fmtMs(o.avgMs) + ' a page'],
+              ['Files responsible', String(o.resources.length)]]
+        .concat(o.resources.slice(0, 3).map(r => ['Blocking file', r.url + ' (' + fmtBytes(r.bytes) + ')']));
+    },
+    why: 'Stylesheets and synchronous scripts in the head halt parsing. Until they are fetched, parsed and executed, nothing paints, regardless of how fast the rest of the page is.',
+    fix: () => ['Inline the CSS needed for the first viewport and load the rest asynchronously.',
+                'Add defer or async to scripts that are not required for first paint.',
+                'Move tag manager and analytics snippets out of the critical path.']
+  },
+  {
+    id: 'unused-js',
+    when: c => { const o = c.opp('unused-javascript'); return o && o.avgBytes > 150000; },
+    severity: c => c.opp('unused-javascript').avgBytes > 400000 ? 'serious' : 'moderate',
+    risk: 'high', effort: 'high',
+    title: c => fmtBytes(c.opp('unused-javascript').avgBytes) + ' of JavaScript a page is never executed',
+    thesis: () => 'The bundle is shipping code the page does not run.',
+    evidence: c => {
+      const o = c.opp('unused-javascript');
+      return [['Pages affected', o.pages + ' of ' + c.n],
+              ['Unused a page', fmtBytes(o.avgBytes)],
+              ['Estimated time cost', fmtMs(o.avgMs) + ' a page']]
+        .concat(o.resources.slice(0, 3).map(r => ['Largest bundle', r.url + ' (' + fmtBytes(r.bytes) + ', on ' + r.pages + ' pages)']));
+    },
+    why: 'Unused JavaScript still costs download, parse and compile time on the main thread. On mid-range mobile hardware, parse and compile dominates, so the byte figure understates the real cost.',
+    fix: () => ['Split bundles by route so a page loads only what it uses.',
+                'Audit the dependency tree for libraries pulled in whole for one function.',
+                'Treat this as sequenced work behind the image and origin fixes; it carries the highest regression risk of the findings here.']
+  },
+  {
+    id: 'third-party',
+    when: c => c.tp.length && c.tp.reduce((s, t) => s + t.avgMs, 0) > 250,
+    severity: c => c.tp.reduce((s, t) => s + t.avgMs, 0) > 600 ? 'serious' : 'moderate',
+    risk: 'medium', effort: 'low',
+    title: c => 'Third-party scripts block the main thread for ' + fmtMs(c.tp.reduce((s, t) => s + t.avgMs, 0)) + ' a page',
+    thesis: () => 'Tags added for measurement are measurably costing the thing they measure.',
+    evidence: c => [['Vendors seen', String(c.tp.length)],
+                    ['Combined blocking time', fmtMs(c.tp.reduce((s, t) => s + t.avgMs, 0)) + ' a page']]
+      .concat(c.tp.slice(0, 5).map(t => [t.entity, fmtMs(t.avgMs) + ' blocking, ' + fmtBytes(t.avgBytes) + ' a page'])),
+    why: 'Third-party scripts execute on the same main thread as the site. Blocking time here delays interaction responsiveness, which is what Interaction to Next Paint measures.',
+    fix: () => ['List every tag against a named owner and a stated purpose. Remove anything without both.',
+                'Load what survives through a single tag manager container, deferred.',
+                'Re-measure after removal; this is usually the cheapest win on the list.']
+  },
+  {
+    id: 'text-compression',
+    when: c => !!c.opp('uses-text-compression'),
+    severity: () => 'serious', risk: 'low', effort: 'low',
+    title: c => 'Text assets are served uncompressed',
+    thesis: () => 'A server setting worth ' + fmtBytes(c.opp('uses-text-compression').avgBytes) + ' a page is switched off.',
+    evidence: c => { const o = c.opp('uses-text-compression');
+      return [['Pages affected', o.pages + ' of ' + c.n], ['Wasted a page', fmtBytes(o.avgBytes)]]; },
+    why: 'Gzip and brotli are decades-old, universally supported and free. Uncompressed text is the clearest signal that no one has looked at the server configuration.',
+    fix: () => ['Enable brotli, falling back to gzip, at the CDN or web server.',
+                'Confirm it covers HTML, CSS, JS, SVG and JSON, not only HTML.']
+  },
+  {
+    id: 'cls',
+    when: c => c.cls > 0.1,
+    severity: c => c.cls > 0.25 ? 'serious' : 'moderate',
+    risk: 'low', effort: 'medium',
+    title: c => 'Layout shifts average ' + r2(c.cls).toFixed(3) + ', above the 0.1 threshold',
+    thesis: () => 'Content moves under the reader while the page loads.',
+    evidence: c => [['Mean CLS', r2(c.cls).toFixed(3)], ['Good threshold', '0.10 or below'],
+                    ['Pages above threshold', String(c.rows.filter(x => x.data.cls > 0.1).length) + ' of ' + c.n]],
+    why: 'Cumulative Layout Shift is a Core Web Vital and one of the few metrics users describe unprompted, usually as tapping the wrong thing.',
+    fix: () => ['Set width and height, or aspect-ratio, on every image and embed.',
+                'Reserve space for banners, consent notices and ad slots before they render.',
+                'Preload fonts and use font-display: optional to avoid reflow on swap.']
+  },
+  {
+    id: 'tbt',
+    when: c => c.tbt > 350,
+    severity: c => c.tbt > 600 ? 'serious' : 'moderate',
+    risk: 'medium', effort: 'high',
+    title: c => 'Main thread blocked for ' + fmtMs(c.tbt) + ' a page',
+    thesis: () => 'The page looks ready before it can respond to being used.',
+    evidence: c => [['Mean total blocking time', fmtMs(c.tbt)], ['Good threshold', '200 ms or below'],
+                    ['Pages above threshold', String(c.rows.filter(x => x.data.tbt > 200).length) + ' of ' + c.n]],
+    why: 'Total Blocking Time is the lab proxy for Interaction to Next Paint. Long tasks mean taps and clicks queue behind script execution, which reads to a user as the site being broken rather than slow.',
+    fix: () => ['Break long tasks with yielding, or move the work to a web worker.',
+                'Defer hydration of components below the fold.',
+                'Address the third-party and unused-JavaScript findings first; they are usually the source.']
+  },
+  {
+    id: 'collection-outlier',
+    when: c => {
+      if(c.collections.length < 2) return false;
+      const worst = c.collections[0];
+      return worst.pages >= 3 && (c.perf - worst.perf) > 15;
+    },
+    severity: () => 'moderate', risk: 'low', effort: 'medium',
+    title: c => 'One collection performs well below the rest of the site',
+    thesis: c => c.collections[0].name + ' is dragging the site average down.',
+    evidence: c => {
+      const w = c.collections[0];
+      return [['Collection', w.name], ['Pages measured', String(w.pages)],
+              ['Mean score', String(r0(w.perf)) + ' against a site mean of ' + r0(c.perf)],
+              ['Mean LCP', fmtMs(w.lcp) + ' against ' + fmtMs(c.lcp) + ' site-wide']];
+    },
+    why: 'A single template performing badly is a narrower and cheaper fix than a site-wide programme, and it isolates the cause to one set of components rather than the whole stack.',
+    fix: c => ['Diff the failing template against a healthy one; the delta is usually one component or one script.',
+               'Fix the template rather than the pages, so the change applies to everything using it.']
+  },
+  {
+    id: 'competitor-gap',
+    when: c => {
+      if(c.sites.length < 2) return false;
+      const prim = c.sites.find(s => s.primary);
+      if(!prim) return false;
+      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)) }))
+                         .filter(x => x.perf != null);
+      const me = byS.find(x => x.s.primary);
+      const best = byS.slice().sort((a, b) => b.perf - a.perf)[0];
+      return me && best && best.s !== me.s && (best.perf - me.perf) > 12;
+    },
+    severity: () => 'moderate', risk: 'low', effort: 'low',
+    title: c => {
+      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)) })).filter(x => x.perf != null);
+      const me = byS.find(x => x.s.primary);
+      const best = byS.slice().sort((a, b) => b.perf - a.perf)[0];
+      return best.s.label + ' outperforms ' + me.s.label + ' by ' + r0(best.perf - me.perf) + ' points';
+    },
+    thesis: () => 'The gap is competitive, not just technical.',
+    evidence: c => {
+      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)),
+                                      lcp: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.lcp)),
+                                      n: c.rows.filter(x => x.site === s.origin).length }))
+                         .filter(x => x.perf != null).sort((a, b) => b.perf - a.perf);
+      return byS.map(x => [x.s.label + (x.s.primary ? ' (subject)' : ''),
+                           'score ' + r0(x.perf) + ', LCP ' + fmtMs(x.lcp) + ', ' + x.n + ' pages']);
+    },
+    why: 'Performance is a relative signal in a competitive set as much as an absolute threshold. A rival meeting the thresholds while this site does not is the version of this argument a stakeholder acts on.',
+    fix: () => ['Use the paired-collection comparison to find which template types lose by the widest margin.',
+                'Treat the leading site as the target rather than the 90-point threshold; it proves the number is reachable in this sector.']
+  },
+  {
+    id: 'cache-ttl',
+    when: c => !!c.opp('uses-long-cache-ttl'),
+    severity: () => 'minor', risk: 'low', effort: 'low',
+    title: () => 'Static assets have short cache lifetimes',
+    thesis: () => 'Returning visitors re-download files that never changed.',
+    evidence: c => { const o = c.opp('uses-long-cache-ttl');
+      return [['Pages affected', o.pages + ' of ' + c.n], ['Re-downloaded a page', fmtBytes(o.avgBytes)]]; },
+    why: 'This affects repeat visits, which lab tools measure as a cold load and therefore understate. The cost is real and is invisible in the scores above.',
+    fix: () => ['Fingerprint static asset filenames and set a one-year immutable cache header.',
+                'Keep HTML on a short TTL; only the fingerprinted assets get the long one.']
+  },
+  {
+    id: 'font-display',
+    when: c => !!c.opp('font-display'),
+    severity: () => 'minor', risk: 'low', effort: 'low',
+    title: () => 'Web fonts block text from rendering',
+    thesis: () => 'Text exists but is hidden while a font downloads.',
+    evidence: c => { const o = c.opp('font-display');
+      return [['Pages affected', o.pages + ' of ' + c.n], ['Delay a page', fmtMs(o.avgMs)]]; },
+    why: 'Invisible text during font load delays the paint of content that was ready. It also interacts with layout shift when the fallback and web font differ in metrics.',
+    fix: () => ['Set font-display: swap, or optional where the flash is unacceptable.',
+                'Preload the one or two faces used above the fold and self-host them.']
+  }
+];
+
+/* Deterministic: rules are evaluated in declaration order, then sorted by
+   severity and, within a severity, back to declaration order. No ties are
+   broken by anything that can vary between runs. */
+function runRules(rows, sites){
+  const c = ctx(rows, sites);
+  const fired = [], skipped = [];
+  RULES.forEach((rule, i) => {
+    let ok = false;
+    try{ ok = !!rule.when(c); }catch(e){ ok = false; }
+    if(!ok){ skipped.push({ id: rule.id }); return; }
+    fired.push({
+      id: rule.id, order: i,
+      severity: rule.severity(c), risk: rule.risk, effort: rule.effort,
+      title: rule.title(c), thesis: rule.thesis(c),
+      evidence: rule.evidence(c), why: rule.why, fix: rule.fix(c)
+    });
+  });
+  fired.sort((a, b) => (SEV_ORDER[a.severity] - SEV_ORDER[b.severity]) || (a.order - b.order));
+  return { ctx: c, fired, skipped };
+}
+
 /* ------------------------------------------------------- report generation */
 /* Both writers, Excel and Google Sheets, consume the same model, so the tabs,
    copy and thresholds are defined once and only the rendering differs. */
@@ -2111,8 +2417,11 @@ function colThresholds(colKey){
 
 function reportTitle(){
   const client = ($('#clientName') && $('#clientName').value.trim()) || '';
-  const subject = state.sites.map(s => s.label).join(' vs ');
-  return 'PageSpeed audit ' + (client ? client + ' ' : '') + subject;
+  if(client) return 'PageSpeed audit: ' + client;
+  const sites = state.sites.map(s => s.label);
+  // the full list lives in the cover metadata; the title stays one line
+  return 'PageSpeed audit: ' + (sites.length > 2 ? sites[0] + ' and ' + (sites.length - 1) + ' competitors'
+        : sites.join(' vs '));
 }
 
 /* --- the model ----------------------------------------------------------- */
@@ -2567,6 +2876,294 @@ function applyXlsxRule(ws, key, r1, c1, r2, c2){
   ws.addConditionalFormatting({ ref, rules: rules.map((r, i) => Object.assign({ type:'cellIs', priority: i + 1 }, r)) });
 }
 
+const REPORT_CSS = [
+':root{--ink:#191A3E;--ink2:#2B2C63;--teal:#0E8C8B;--cream:#F5F0E6;--amber:#A9720C;',
+'--body:#26262e;--muted:#6b6a75;--rule:#d9d7d0;--soft:#f6f5f2;--paper:#fff}',
+'*{box-sizing:border-box}html,body{margin:0;padding:0}',
+'body{background:#e9e8e3;color:var(--body);font:11pt/1.62 "IBM Plex Sans",system-ui,sans-serif;',
+'-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}',
+'h1,h2,h3{font-family:"Space Grotesk",system-ui,sans-serif;font-weight:600;letter-spacing:-.015em;color:var(--ink);margin:0}',
+'p{margin:0 0 11px}',
+'.eyebrow{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:8.5pt;letter-spacing:.14em;',
+'text-transform:uppercase;color:var(--muted);margin-bottom:9px}',
+'.eyebrow.light{color:rgba(255,255,255,.62)}',
+'.cover,.page{background:var(--paper);width:210mm;min-height:297mm;margin:0 auto 10mm;padding:24mm 22mm;position:relative}',
+'.cover{background:var(--ink);color:#fff;display:flex;flex-direction:column;justify-content:space-between;padding:26mm 22mm}',
+'.cover h1{color:#fff;font-size:32pt;line-height:1.1;margin:0 0 14px;max-width:15ch}',
+'.badge{position:absolute;top:14mm;left:22mm;font-family:"IBM Plex Mono",monospace;font-size:8pt;',
+'letter-spacing:.14em;text-transform:uppercase;color:var(--ink);background:var(--cream);padding:4px 10px;border-radius:3px}',
+'.onelinethesis{color:rgba(255,255,255,.86);font-size:13pt;line-height:1.5;max-width:52ch;margin:0}',
+'.covermeta{border-top:1px solid rgba(255,255,255,.22);padding-top:14px;max-width:78ch}',
+'.mrow{display:flex;gap:16px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.09)}',
+'.mrow:last-child{border-bottom:0}',
+'.mk{font-family:"IBM Plex Mono",monospace;font-size:8.5pt;letter-spacing:.09em;text-transform:uppercase;',
+'color:rgba(255,255,255,.5);width:34mm;flex:none;padding-top:2px}',
+'.mv{color:#fff;font-size:10.5pt}',
+'.rule{height:2px;background:var(--ink);margin-bottom:11px;width:100%}',
+'.page h2{font-size:22pt;line-height:1.15;margin-bottom:6px}',
+'.deck{color:var(--muted);font-size:11.5pt;max-width:62ch;margin-bottom:20px}',
+'.page h3{font-size:12pt;margin:20px 0 8px;color:var(--ink2)}',
+'.contents .toc{list-style:none;margin:0;padding:0;max-width:70%}',
+'.toc li{display:flex;gap:14px;align-items:baseline;padding:9px 0;border-bottom:1px solid var(--rule)}',
+'.cn{font-family:"IBM Plex Mono",monospace;font-size:9pt;color:var(--teal);width:16px;flex:none}',
+'.ct{font-family:"Space Grotesk",sans-serif;font-size:12pt;color:var(--ink)}',
+'.thesis{background:var(--ink);color:#fff;padding:18px 20px;border-radius:4px;font-size:13pt;',
+'line-height:1.5;margin:0 0 18px;font-family:"Space Grotesk",sans-serif}',
+'.counts{display:flex;gap:10px;margin:0 0 18px}',
+'.count{flex:1;border:1px solid var(--rule);border-radius:4px;padding:11px 13px;background:var(--soft)}',
+'.count b{display:block;font-family:"Space Grotesk",sans-serif;font-size:22pt;line-height:1;color:var(--ink)}',
+'.count span{font-family:"IBM Plex Mono",monospace;font-size:8pt;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}',
+'table{width:100%;border-collapse:collapse;font-size:10pt;margin:0 0 14px}',
+'table.data th{background:var(--ink);color:#fff;text-align:left;font-family:"IBM Plex Mono",monospace;',
+'font-size:8pt;letter-spacing:.08em;text-transform:uppercase;padding:7px 9px;font-weight:500}',
+'table.data td{padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top}',
+'table.data tbody tr:nth-child(even) td{background:var(--soft)}',
+'table.kv{font-size:10pt}',
+'table.kv th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:8.5pt;letter-spacing:.05em;',
+'color:var(--ink2);font-weight:500;padding:5px 12px 5px 0;width:44%;vertical-align:top;border-bottom:1px solid var(--rule)}',
+'table.kv td{padding:5px 0;border-bottom:1px solid var(--rule);vertical-align:top}',
+'code{font-family:"IBM Plex Mono",monospace;font-size:9pt;background:var(--soft);padding:1px 5px;border-radius:3px}',
+'.card{border:1px solid var(--rule);border-left:3px solid var(--teal);border-radius:4px;',
+'padding:14px 16px;margin:0 0 13px;break-inside:avoid;page-break-inside:avoid}',
+'.card .lede{margin-bottom:11px;font-size:11pt}',
+'.card table.kv{font-size:9.5pt}.card table.kv th{padding:4px 10px 4px 0}.card table.kv td{padding:4px 0}',
+'.card .steps li{margin-bottom:4px}',
+'.cardhead{display:flex;gap:11px;align-items:baseline;margin-bottom:9px}',
+'.num{font-family:"IBM Plex Mono",monospace;font-size:9pt;color:var(--teal);flex:none}',
+'.card h3{margin:0;font-size:13pt;line-height:1.25}',
+'.pills{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}',
+'.pill{font-family:"IBM Plex Mono",monospace;font-size:7.5pt;letter-spacing:.08em;text-transform:uppercase;',
+'padding:3px 8px;border-radius:3px;border:1px solid transparent}',
+'.pill.plain{background:var(--soft);color:var(--ink2);border-color:var(--rule)}',
+'.pill em{font-style:normal;opacity:.6;margin-right:4px}',
+'.lede{font-size:11.5pt;color:var(--ink2);margin-bottom:13px;max-width:66ch}',
+'.two{display:grid;grid-template-columns:1fr 1fr;gap:22px}',
+'.lbl{font-family:"IBM Plex Mono",monospace;font-size:8pt;letter-spacing:.1em;text-transform:uppercase;',
+'color:var(--muted);margin:0 0 6px}',
+'.two .lbl:not(:first-child){margin-top:14px}',
+'.steps{margin:0;padding-left:17px}.steps li{margin-bottom:5px}',
+'.callout{background:var(--cream);border-left:3px solid var(--amber);padding:13px 16px;border-radius:3px;',
+'margin:16px 0 0;font-size:10.5pt}',
+'.muted{color:var(--muted);font-size:10pt}',
+'@page{size:A4;margin:0}',
+'@media print{body{background:#fff}',
+'.cover,.page{margin:0;box-shadow:none;break-before:page;page-break-before:always;min-height:0;height:auto}',
+'.cover{height:297mm;break-before:auto;page-break-before:auto}',
+'a{color:inherit;text-decoration:none}}',
+'@media screen{.cover,.page{box-shadow:0 1px 3px rgba(0,0,0,.10),0 12px 34px rgba(0,0,0,.09)}',
+'body{padding:10mm 0}}'
+].join('');
+
+/* --------------------------------------------- deterministic report renderer */
+/* Self-contained HTML in Jake Labate's deliverable format, print-ready. The only
+   input that varies between two runs on the same data is the report date, which
+   is an explicit field rather than a call to the clock at render time. */
+
+const SEV_PILL = {
+  critical: { label:'Critical', bg:'#FBE7E7', fg:'#8E1F1F', bd:'#E4B6B6' },
+  serious:  { label:'Serious',  bg:'#FBEEE5', fg:'#8A4718', bd:'#E6C8AF' },
+  moderate: { label:'Moderate', bg:'#FDF6E3', fg:'#7A5A05', bd:'#E6D6A8' },
+  minor:    { label:'Minor',    bg:'#EEF2F5', fg:'#3F4C57', bd:'#CBD5DC' }
+};
+const LEVEL_PILL = { low:{label:'Low'}, medium:{label:'Medium'}, high:{label:'High'} };
+
+function reportModelFromRules(rows, sites, meta){
+  const { ctx: c, fired, skipped } = runRules(rows, sites);
+  const counts = { critical:0, serious:0, moderate:0, minor:0 };
+  fired.forEach(f => { counts[f.severity]++; });
+
+  // Deterministic thesis: chosen by band, then filled from measurements.
+  const band = c.perf >= 90 ? 'good' : c.perf >= 50 ? 'mid' : 'poor';
+  const lead = fired[0];
+  /* Titles are full sentences, so the lead finding is appended as its own
+     sentence rather than spliced into the clause, which reads as broken English. */
+  const leadLine = lead ? ' The largest is the first one listed: ' + lowerFirst(lead.title) + '.' : '';
+  const thesis =
+    band === 'poor'
+      ? 'Across ' + c.n + ' sampled pages the mean Lighthouse performance score is ' + r0(c.perf) +
+        ', which fails Google\'s threshold, and the cause concentrates in ' + fired.length +
+        ' finding' + (fired.length === 1 ? '' : 's') + ' rather than being spread thinly.' + leadLine
+    : band === 'mid'
+      ? 'The site averages ' + r0(c.perf) + ' across ' + c.n + ' sampled pages, inside the needs-work band rather than failing, with ' +
+        (counts.critical + counts.serious) + ' finding' + ((counts.critical + counts.serious) === 1 ? '' : 's') +
+        ' worth acting on.' + leadLine
+      : 'The site averages ' + r0(c.perf) + ' across ' + c.n + ' sampled pages and meets Google\'s threshold. The findings below are refinements rather than repairs.';
+
+  // Roadmap: severity first, effort as the tie-break, with the origin fix
+  // pinned ahead of front-end work because it caps the benefit of everything.
+  const phase = f => {
+    if(f.id === 'ttfb-origin') return 'now';
+    if(f.severity === 'critical') return 'now';
+    if(f.severity === 'serious' && f.effort === 'low') return 'now';
+    if(f.severity === 'serious' || (f.severity === 'moderate' && f.effort !== 'high')) return 'next';
+    return 'later';
+  };
+  const roadmap = { now: [], next: [], later: [] };
+  fired.forEach(f => roadmap[phase(f)].push(f));
+
+  const working = [], failing = [];
+  for(const col of SHEET_COLS){
+    const v = mean(rows.map(x => x.data[col.key]));
+    (grade(col.key, v) === 'good' ? working : failing).push([col.label, fmt(col.key, v)]);
+  }
+
+  return { c, fired, skipped, counts, thesis, roadmap, working, failing, meta };
+}
+function lowerFirst(s){ return s.charAt(0).toLowerCase() + s.slice(1); }
+
+function renderReportHTML(m){
+  const meta = m.meta;
+  const E = esc;
+  const pill = (spec, text) => '<span class="pill" style="background:' + spec.bg + ';color:' + spec.fg +
+    ';border-color:' + spec.bd + '">' + E(text) + '</span>';
+  const sevPill = s => pill(SEV_PILL[s], SEV_PILL[s].label);
+  const plainPill = (label, val) => '<span class="pill plain"><em>' + E(label) + '</em>' + E(val) + '</span>';
+
+  const secs = [];
+  let sn = 0;
+  const sec = (title, deck, body) => { secs.push({ n: sn++, title, deck, body }); };
+
+  sec('Method', 'How these numbers were produced and what they do not cover.',
+    '<h3>Context</h3><p>' + (meta.client ? 'Prepared for ' + E(meta.client) + '. ' : '') +
+    'This measures loading performance across a representative sample of ' +
+    (m.c.sites.length > 1 ? m.c.sites.length + ' sites' : E(m.c.sites[0].label)) +
+    ', not every page. Pages are sampled per collection so the figures describe the site as a whole rather than whichever pages happen to be fastest.</p>' +
+    '<h3>Sources</h3><p>Google PageSpeed Insights API v5, which runs Lighthouse on Google\'s infrastructure. URL inventory comes from each site\'s own XML sitemap. Where Google holds Chrome User Experience Report data for a URL it is reported separately and labelled as field data.</p>' +
+    '<h3>Scope</h3>' + kvTable([
+      ['Sites', m.c.sites.map(s => s.origin).join(', ')],
+      ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length)],
+      ['Measurements', String(m.c.rows.length) + ' (' + E(meta.strategy) + ')'],
+      ['Sampling', 'Up to ' + meta.perGroup + ' URLs per collection, ' + meta.totalCap + ' per site maximum'],
+      ['Report date', E(meta.date)]
+    ]) +
+    '<h3>Assumptions</h3><p>Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ. Thresholds are Google\'s published Core Web Vitals bands, listed in the rubric.</p>' +
+    '<div class="callout"><b>Every statement in this document is generated by a rule.</b> No finding is written by hand or by a language model. Each recommendation names the measured condition that triggered it, and the appendix lists every rule that was evaluated, including those that did not fire. The same measurements always produce the same document.</div>');
+
+  sec('Inventory', 'What was discovered and what was measured.',
+    tableHTML(['Site','URLs found','Collections','Pages measured','Mean score'],
+      m.c.sites.map(s => {
+        const rs = m.c.rows.filter(r => r.site === s.origin);
+        return [s.label + (s.primary ? ' (subject)' : ''), String(s.items.length),
+                String(s.groups.length), String(rs.length),
+                rs.length ? String(r0(mean(rs.map(r => r.data.perf)))) : 'not measured'];
+      })) +
+    '<h3>By collection</h3>' +
+    tableHTML(['Collection','Pages','Mean score','Mean LCP'],
+      m.c.collections.map(col => [col.name, String(col.pages), String(r0(col.perf)), fmtMs(col.lcp)])));
+
+  sec('Findings', 'The headline position and the shape of the problem.',
+    '<div class="thesis">' + E(m.thesis) + '</div>' +
+    '<div class="counts">' +
+      ['critical','serious','moderate','minor'].map(k =>
+        '<div class="count"><b>' + m.counts[k] + '</b><span>' + SEV_PILL[k].label + '</span></div>').join('') +
+    '</div>' +
+    tableHTML(['Metric','Mean','Band'],
+      SHEET_COLS.map(col => {
+        const v = mean(m.c.rows.map(x => x.data[col.key]));
+        return [col.label, fmt(col.key, v), GRADE_LABEL[grade(col.key, v)]];
+      })));
+
+  sec('What is working', 'Stated so the recommendations are not read as a verdict on everything.',
+    (m.working.length
+      ? '<p>These metrics are inside Google\'s good band across the sample and need no work.</p>' + kvTable(m.working)
+      : '<p>No metric averages inside the good band across this sample. That is unusual and is itself the finding.</p>') +
+    (m.failing.length ? '<h3>Outside the good band</h3>' + kvTable(m.failing) : ''));
+
+  const recBody = m.fired.length
+    ? m.fired.map((f, i) => cardHTML(f, sn + '.' + (i + 1), sevPill, plainPill)).join('')
+    : '<p>No rule fired against this sample. Every measured condition sits inside its threshold.</p>';
+  sec('Recommendations', 'Each carries the severity of leaving it alone and the risk of the fix itself going wrong.', recBody);
+
+  sec('Roadmap', 'Sequenced by severity, then by what unblocks what.',
+    ['now','next','later'].map(k => {
+      const items = m.roadmap[k];
+      if(!items.length) return '';
+      const label = k === 'now' ? 'Now' : k === 'next' ? 'Next' : 'Later';
+      const note = k === 'now'
+        ? 'Do these before measuring again. Where a server response finding appears here it is listed first deliberately: it caps the benefit of every front-end change made after it.'
+        : k === 'next' ? 'Worth doing, but the figures above will not move much until the first phase lands.'
+        : 'Real, but small enough that it should not compete for the same engineering time.';
+      return '<h3>' + label + '</h3><p class="muted">' + note + '</p>' +
+        tableHTML(['Finding','Severity','Fix risk','Effort'],
+          items.map(f => [f.title, SEV_PILL[f.severity].label, LEVEL_PILL[f.risk].label, LEVEL_PILL[f.effort].label]));
+    }).join(''));
+
+  sec('Rubric and glossary', 'The thresholds every band in this document is measured against.',
+    tableHTML(['Metric','What it measures','Good','Needs work','Poor'],
+      SHEET_COLS.map(col => {
+        const mt = METRICS[col.key];
+        const f = col.unit === 's' ? 1000 : 1;
+        const u = col.unit === 's' ? ' s' : col.unit === 'ms' ? ' ms' : '';
+        return [col.label, GLOSSARY[col.key] || '',
+          mt.higher ? mt.good + ' or above' : (mt.good / f) + u + ' or below',
+          mt.higher ? mt.ni + ' to ' + (mt.good - 1) : 'over ' + (mt.good / f) + u + ', up to ' + (mt.ni / f) + u,
+          mt.higher ? 'below ' + mt.ni : 'over ' + (mt.ni / f) + u];
+      })));
+
+  sec('How this was generated', 'Every rule evaluated, including those that did not fire.',
+    '<p>The document above is produced by a fixed rule set applied to the measurements. A rule fires only when its condition is met, and its wording is a template filled from the same numbers shown in its evidence table, so the prose and the data cannot disagree. Rules that did not fire are listed so that a silence in this report can be told apart from an omission.</p>' +
+    tableHTML(['Rule','Result'],
+      RULES.map(r => {
+        const f = m.fired.find(x => x.id === r.id);
+        return ['<code>' + E(r.id) + '</code>', f ? 'Fired, ' + SEV_PILL[f.severity].label.toLowerCase() : 'Did not fire'];
+      }), true));
+
+  const contents = secs.map(s => '<li><span class="cn">' + s.n + '</span><span class="ct">' + E(s.title) + '</span></li>').join('');
+
+  return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    '<title>' + E(meta.title) + '</title>\n' +
+    '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
+    '<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">\n' +
+    '<style>' + REPORT_CSS + '</style>\n</head>\n<body>\n' +
+    coverHTML(meta, m) +
+    '<section class="page contents"><div class="eyebrow">Contents</div><ol class="toc">' + contents + '</ol></section>' +
+    secs.map(s =>
+      '<section class="page"><div class="rule"></div><div class="eyebrow">Section ' + s.n + '</div>' +
+      '<h2>' + E(s.title) + '</h2><p class="deck">' + E(s.deck) + '</p>' + s.body + '</section>').join('') +
+    '\n</body>\n</html>\n';
+}
+
+function cardHTML(f, num, sevPill, plainPill){
+  return '<article class="card">' +
+    '<div class="cardhead"><span class="num">' + esc(num) + '</span>' +
+    '<h3>' + esc(f.title) + '</h3></div>' +
+    '<div class="pills">' + sevPill(f.severity) +
+      plainPill('Fix risk ', LEVEL_PILL[f.risk].label) +
+      plainPill('Effort ', LEVEL_PILL[f.effort].label) + '</div>' +
+    '<p class="lede">' + esc(f.thesis) + '</p>' +
+    '<div class="two"><div><div class="lbl">Evidence</div>' +
+      kvTable(f.evidence) + '</div>' +
+    '<div><div class="lbl">Why it matters</div><p>' + esc(f.why) + '</p>' +
+      '<div class="lbl">What to do</div><ol class="steps">' +
+      f.fix.map(s => '<li>' + esc(s) + '</li>').join('') + '</ol></div></div>' +
+    '</article>';
+}
+function kvTable(rows){
+  return '<table class="kv"><tbody>' + rows.map(([k, v]) =>
+    '<tr><th>' + esc(k) + '</th><td>' + esc(v) + '</td></tr>').join('') + '</tbody></table>';
+}
+function tableHTML(headers, rows, raw){
+  return '<table class="data"><thead><tr>' + headers.map(h => '<th>' + esc(h) + '</th>').join('') +
+    '</tr></thead><tbody>' + rows.map(r => '<tr>' + r.map(c =>
+      '<td>' + (raw ? c : esc(c)) + '</td>').join('') + '</tr>').join('') + '</tbody></table>';
+}
+function coverHTML(meta, m){
+  return '<section class="cover"><div class="badge">Deliverable</div>' +
+    '<div class="covertop"><div class="eyebrow light">PageSpeed audit</div>' +
+    '<h1>' + esc(meta.title) + '</h1>' +
+    '<p class="onelinethesis">' + esc(m.thesis) + '</p></div>' +
+    '<div class="covermeta">' +
+      [['Subject', m.c.sites.map(s => s.label).join(', ')],
+       ['Prepared for', meta.client || 'Internal'],
+       ['Prepared by', 'Jake Labate, SEO Consultant'],
+       ['Strategy', meta.strategy],
+       ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length)],
+       ['Date', meta.date]].map(([k, v]) =>
+        '<div class="mrow"><span class="mk">' + esc(k) + '</span><span class="mv">' + esc(v) + '</span></div>').join('') +
+    '</div></section>';
+}
+
 /* ------------------------------------------------------------- exporting */
 const AVG_KEYS = ['perf','lcp','cls','tbt','fcp','si','ttfb'];
 function avgOf(rs, fn){ return Object.fromEntries(AVG_KEYS.map(k => [k, fn(rs.map(r => r.data[k]))])); }
@@ -2955,6 +3552,58 @@ $('#mkSheet').addEventListener('click', async () => {
   }finally{ btn.disabled = false; btn.textContent = was; }
 });
 
+
+/* --- deterministic report button ---------------------------------------- */
+async function sha256Hex(str){
+  try{
+    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+    return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+  }catch(e){ return null; }
+}
+
+function buildDeterministicReport(){
+  const strategies = uniq(state.results.map(r => r.strategy));
+  const strategy = ($('#resStrategy') && $('#resStrategy').value) || strategies[0];
+  const rows = state.results.filter(r => r.ok && r.strategy === strategy);
+  if(!rows.length) throw new Error('No successful measurements for ' + strategy + ' to report on.');
+  const meta = {
+    title: reportTitle(),
+    client: ($('#clientName').value || '').trim(),
+    strategy,
+    date: ($('#reportDate').value || new Date().toISOString().slice(0, 10)),
+    perGroup: clampInt($('#perGroup').value, 1, 10, 10),
+    totalCap: clampInt($('#totalCap').value, 1, 100, 100)
+  };
+  const model = reportModelFromRules(rows, state.sites, meta);
+  return { html: renderReportHTML(model), model, meta };
+}
+
+$('#dlReport').addEventListener('click', async () => {
+  if(!state.results.length) return;
+  const btn = $('#dlReport'); const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Generating…';
+  try{
+    const { html, model, meta } = buildDeterministicReport();
+    const hash = await sha256Hex(html);
+    const blob = new Blob([html], { type:'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'pagespeed-report-' + runSlug() + '-' + meta.date + '.html';
+    document.body.appendChild(a); a.click(); a.remove();
+    const fired = model.fired.length, total = RULES.length;
+    $('#reportNote').innerHTML = '<div class="note"><b>Report generated.</b> ' +
+      fired + ' of ' + total + ' rules fired, producing ' + fired + ' recommendation' + (fired === 1 ? '' : 's') +
+      ' across ' + model.c.n + ' measurements. Downloaded as HTML; open it and print to PDF for the client copy. ' +
+      '<a href="' + url + '" target="_blank" rel="noopener">Open it now</a>.' +
+      (hash ? '<br><span class="mono" style="font-size:11px;color:var(--muted)">SHA-256 ' + esc(hash) +
+        '. Regenerating from the same measurements and the same report date reproduces this hash exactly.</span>' : '') +
+      '</div>';
+    setTimeout(() => URL.revokeObjectURL(url), 600000);
+  }catch(e){
+    $('#reportNote').innerHTML = '<div class="err">Could not generate the report: ' + esc(e.message) + '</div>';
+  }finally{ btn.disabled = false; btn.textContent = was; }
+});
+
 /* --------------------------------------------------------------- wiring */
 function originOf(raw){
   let v = (raw || '').trim();
@@ -3112,6 +3761,7 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
 
 /* deep link: ?site=a.com&site=b.com */
 (function showOrigin(){ const n = $('#originHint'); if(n) n.textContent = location.origin; })();
+(function defaultDate(){ const n = $('#reportDate'); if(n && !n.value) n.value = new Date().toISOString().slice(0, 10); })();
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
   const sites = q.getAll('site').filter(Boolean);
