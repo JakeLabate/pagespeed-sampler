@@ -29,6 +29,37 @@ against each other.
    Speed Index, plus a per-collection breakdown, a sortable per-page table, real-user
    CrUX field data where Google has it, and CSV / JSON export.
 
+## Opportunities
+
+Every PageSpeed call returns the whole Lighthouse audit set, not just the metrics. The
+tool keeps the part that names a cause: `render-blocking-resources`,
+`unused-javascript`, `modern-image-formats`, `largest-contentful-paint-element`,
+`third-party-summary` and about twenty more, each with the specific files responsible
+and the bytes and milliseconds attached to them.
+
+Those are rolled up across the whole sample, so one slow asset on forty pages is one
+finding rather than forty. The results carry three sections and the workbook four tabs:
+
+- **Opportunities**, ranked by total impact, with the files responsible under each row
+  and a one-line fix.
+- **Offending resources**, every file a finding names, with its own size and how many
+  sampled pages it appears on. This is where "the hero image is 1.1 MB and it is on 36
+  pages" comes from.
+- **LCP elements**, the element Lighthouse actually timed, grouped by CSS selector. One
+  element carrying LCP across a whole template is one fix with wide reach.
+- **Third parties**, what each vendor costs in blocking time and bytes on a typical
+  page.
+
+Figures are reported **per page**, deliberately. Lighthouse's savings estimates summed
+across a sample produce numbers like "90 seconds wasted", which is not time anyone can
+save and reads as nonsense to a client. Per-page is what a fix actually returns. The
+across-sample totals are kept in the workbook as a breadth signal and are labelled as
+such, and the ranking uses them so that a small saving on every page outranks a large
+one on a single page.
+
+The LCP element parser walks the audit details tree rather than indexing a fixed path,
+because the node moved between Lighthouse versions and will move again.
+
 ## Comparing sites
 
 Enter up to four domains. Each is discovered, grouped and sampled on its own, then every

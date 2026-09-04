@@ -1050,6 +1050,218 @@ function buildGroupsAndSample(){
   resampleForMapping();
 }
 
+/* ------------------------------------------------------- opportunity audits */
+/* PSI returns the whole Lighthouse audit set on every call. These are the ones
+   that name a cause and a fix rather than restating a metric. `fix` is what
+   turns a number in a report into a recommendation. */
+const OPPS = [
+  { id:'render-blocking-resources', label:'Render-blocking resources',
+    fix:'Defer or inline the CSS and JS blocking first paint.' },
+  { id:'prioritize-lcp-image', label:'LCP image not prioritised',
+    fix:'Preload the LCP image and set fetchpriority="high".' },
+  { id:'lcp-lazy-loaded', label:'LCP image lazy-loaded',
+    fix:'Remove loading="lazy" from the above-the-fold hero image.' },
+  { id:'unused-javascript', label:'Unused JavaScript',
+    fix:'Code-split and drop what the page never executes.' },
+  { id:'unused-css-rules', label:'Unused CSS',
+    fix:'Split stylesheets per template or inline critical CSS only.' },
+  { id:'modern-image-formats', label:'Images not in a modern format',
+    fix:'Serve WebP or AVIF with a fallback.' },
+  { id:'uses-optimized-images', label:'Images not compressed',
+    fix:'Re-encode at a sane quality; most of this is free.' },
+  { id:'uses-responsive-images', label:'Images larger than displayed',
+    fix:'Serve sized variants with srcset.' },
+  { id:'offscreen-images', label:'Offscreen images loaded eagerly',
+    fix:'Lazy-load anything below the fold, never the LCP element.' },
+  { id:'efficient-animated-content', label:'Animated GIFs',
+    fix:'Replace GIFs with MP4 or WebM.' },
+  { id:'uses-text-compression', label:'Text not compressed',
+    fix:'Enable gzip or brotli at the server or CDN.' },
+  { id:'unminified-javascript', label:'Unminified JavaScript', fix:'Minify in the build.' },
+  { id:'unminified-css', label:'Unminified CSS', fix:'Minify in the build.' },
+  { id:'duplicated-javascript', label:'Duplicated JavaScript',
+    fix:'Deduplicate bundled modules shipped more than once.' },
+  { id:'legacy-javascript', label:'Legacy JavaScript polyfills',
+    fix:'Drop transpilation and polyfills for browsers you no longer support.' },
+  { id:'server-response-time', label:'Slow server response',
+    fix:'Cache at the edge, or fix the origin. Nothing else helps until this does.' },
+  { id:'redirects', label:'Redirect chains',
+    fix:'Link to the final URL so the redirect never runs.' },
+  { id:'uses-rel-preconnect', label:'Missing preconnect',
+    fix:'Preconnect to the origins the critical path depends on.' },
+  { id:'uses-long-cache-ttl', label:'Short cache lifetimes',
+    fix:'Fingerprint static assets and cache them for a year.' },
+  { id:'total-byte-weight', label:'Heavy page weight',
+    fix:'The sum of everything above. Treat as a symptom, not a task.' },
+  { id:'font-display', label:'Fonts block text rendering',
+    fix:'Set font-display: swap or optional.' },
+  { id:'dom-size', label:'Excessive DOM size',
+    fix:'Reduce node count; large DOMs slow every subsequent interaction.' },
+  { id:'bootup-time', label:'JavaScript execution time',
+    fix:'Profile the main thread and cut the heaviest scripts.' },
+  { id:'mainthread-work-breakdown', label:'Main thread work',
+    fix:'Break up long tasks so input is not blocked.' }
+];
+const OPP_INDEX = new Map(OPPS.map(o => [o.id, o]));
+
+const num = v => (typeof v === 'number' && isFinite(v)) ? v : 0;
+
+/* The LCP element sits at a different depth depending on the Lighthouse
+   version, so walk the details tree for the first object carrying a node
+   rather than hard-coding a path that will move again. */
+function findNode(obj, depth){
+  if(!obj || typeof obj !== 'object' || (depth || 0) > 5) return null;
+  if(obj.node && typeof obj.node === 'object' && (obj.node.selector || obj.node.snippet || obj.node.nodeLabel)) return obj.node;
+  const kids = Array.isArray(obj) ? obj : (obj.items || obj.details || []);
+  if(Array.isArray(kids)){
+    for(const k of kids){ const n = findNode(k, (depth || 0) + 1); if(n) return n; }
+  }
+  return null;
+}
+function entityName(e){
+  if(!e) return null;
+  if(typeof e === 'string') return e;
+  return e.text || e.name || e.url || null;
+}
+
+function extractOpportunities(lr){
+  const audits = lr.audits || {};
+  const out = [];
+  for(const spec of OPPS){
+    const a = audits[spec.id];
+    if(!a) continue;
+    const d = a.details || {};
+    const ms = num(d.overallSavingsMs) || num((d.summary || {}).wastedMs) || 0;
+    let bytes = num(d.overallSavingsBytes) || num((d.summary || {}).wastedBytes) || 0;
+    const score = (typeof a.score === 'number') ? a.score : null;
+    // total-byte-weight reports weight rather than savings
+    if(spec.id === 'total-byte-weight') bytes = num(a.numericValue);
+    if(spec.id === 'server-response-time' && !ms) { /* numericValue is the response time */ }
+    const passing = score !== null && score >= 0.9;
+    if(passing && !ms && !bytes) continue;
+    const items = [];
+    for(const it of (d.items || []).slice(0, 8)){
+      const url = it.url || (it.source && (it.source.url || it.source)) || entityName(it.entity) || null;
+      if(!url) continue;
+      items.push({
+        url: String(url).slice(0, 300),
+        bytes: num(it.wastedBytes) || num(it.totalBytes) || num(it.transferSize),
+        ms: num(it.wastedMs) || num(it.blockingTime) || num(it.mainThreadTime)
+      });
+    }
+    out.push({ id: spec.id, score, ms, bytes, items });
+  }
+  return out;
+}
+
+function extractDiagnostics(lr){
+  const audits = lr.audits || {};
+  const lcpAudit = audits['largest-contentful-paint-element'];
+  const node = lcpAudit ? findNode(lcpAudit.details, 0) : null;
+  const tp = [];
+  const tpItems = ((audits['third-party-summary'] || {}).details || {}).items || [];
+  for(const it of tpItems.slice(0, 8)){
+    const name = entityName(it.entity);
+    if(!name) continue;
+    tp.push({ entity: name, ms: num(it.blockingTime) || num(it.mainThreadTime), bytes: num(it.transferSize) });
+  }
+  const shifts = [];
+  const clsItems = ((audits['layout-shift-elements'] || {}).details || {}).items || [];
+  for(const it of clsItems.slice(0, 5)){
+    const n = findNode(it, 0) || it.node;
+    if(n) shifts.push({ label: (n.nodeLabel || n.selector || '').slice(0, 120), score: num(it.score) });
+  }
+  return {
+    lcpElement: node ? {
+      selector: (node.selector || '').slice(0, 200),
+      label: (node.nodeLabel || '').slice(0, 160),
+      snippet: (node.snippet || '').slice(0, 300)
+    } : null,
+    thirdParty: tp,
+    shiftElements: shifts
+  };
+}
+
+/* Roll the per-page audits up across the whole sample. One slow hero image on
+   forty pages is one recommendation, not forty. */
+function aggregateOpportunities(rows){
+  const byAudit = new Map();
+  for(const r of rows){
+    if(!r.data || !r.data.opps) continue;
+    for(const o of r.data.opps){
+      if(!byAudit.has(o.id)){
+        const spec = OPP_INDEX.get(o.id) || { label: o.id, fix: '' };
+        byAudit.set(o.id, { id:o.id, label:spec.label, fix:spec.fix, pages:0, ms:0, bytes:0,
+                            sites:new Set(), resources:new Map(), worstScore: 1 });
+      }
+      const agg = byAudit.get(o.id);
+      agg.pages++; agg.ms += o.ms; agg.bytes += o.bytes;
+      agg.sites.add(r.siteLabel);
+      if(o.score !== null) agg.worstScore = Math.min(agg.worstScore, o.score);
+      for(const it of o.items){
+        if(!agg.resources.has(it.url)) agg.resources.set(it.url, { url: it.url, bytes:0, ms:0, pages:0 });
+        const res = agg.resources.get(it.url);
+        res.bytes = Math.max(res.bytes, it.bytes);   // the file's own weight
+        res.ms = Math.max(res.ms, it.ms);            // its cost on one page
+        res.pages++;
+      }
+    }
+  }
+  const list = Array.from(byAudit.values()).map(a => Object.assign(a, {
+    sites: Array.from(a.sites),
+    resources: Array.from(a.resources.values()).sort((x,y) => (y.bytes - x.bytes) || (y.ms - x.ms)).slice(0, 40),
+    avgMs: a.pages ? a.ms / a.pages : 0,
+    avgBytes: a.pages ? a.bytes / a.pages : 0
+  }));
+  // time first, since that is what a user feels; byte-only findings rank beneath
+  list.sort((a, b) => (b.ms - a.ms) || (b.bytes - a.bytes));
+  return list;
+}
+
+function aggregateLcpElements(rows){
+  const by = new Map();
+  for(const r of rows){
+    const el = r.data && r.data.diag && r.data.diag.lcpElement;
+    if(!el) continue;
+    const key = el.selector || el.label || el.snippet;
+    if(!key) continue;
+    if(!by.has(key)) by.set(key, { key, label: el.label || el.selector, selector: el.selector,
+                                   snippet: el.snippet, pages:0, lcps:[], sites:new Set() });
+    const e = by.get(key);
+    e.pages++; e.sites.add(r.siteLabel);
+    if(r.data.lcp != null) e.lcps.push(r.data.lcp);
+  }
+  return Array.from(by.values())
+    .map(e => Object.assign(e, { sites: Array.from(e.sites), meanLcp: mean(e.lcps) }))
+    .sort((a, b) => b.pages - a.pages);
+}
+
+function aggregateThirdParty(rows){
+  const by = new Map();
+  for(const r of rows){
+    const tp = r.data && r.data.diag && r.data.diag.thirdParty;
+    if(!tp) continue;
+    for(const t of tp){
+      if(!by.has(t.entity)) by.set(t.entity, { entity:t.entity, ms:0, bytes:0, pages:0 });
+      const e = by.get(t.entity);
+      e.ms += t.ms; e.bytes += t.bytes; e.pages++;
+      e.avgMs = e.ms / e.pages; e.avgBytes = e.bytes / e.pages;
+    }
+  }
+  return Array.from(by.values()).sort((a, b) => (b.avgMs - a.avgMs) || (b.avgBytes - a.avgBytes));
+}
+
+const fmtBytes = b => {
+  if(!b || !isFinite(b)) return '0';
+  if(b >= 1048576) return (b / 1048576).toFixed(1) + ' MB';
+  if(b >= 1024) return Math.round(b / 1024) + ' KB';
+  return Math.round(b) + ' B';
+};
+const fmtMs = m => {
+  if(!m || !isFinite(m)) return '0';
+  return m >= 1000 ? (m / 1000).toFixed(2) + ' s' : Math.round(m) + ' ms';
+};
+
 /* --------------------------------------------------------- PSI API runner */
 const PSI_ENDPOINT = 'https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed';
 
@@ -1076,6 +1288,8 @@ function extractRun(json){
     fieldInp: pct('INTERACTION_TO_NEXT_PAINT'),
     fieldTtfb: pct('EXPERIMENTAL_TIME_TO_FIRST_BYTE'),
     fieldOverall: le.overall_category || null,
+    opps: extractOpportunities(lr),
+    diag: extractDiagnostics(lr),
     finalUrl: lr.finalDisplayedUrl || lr.finalUrl || json.id || null,
     fetchedAt: lr.fetchTime || null,
     lhVersion: lr.lighthouseVersion || null
@@ -1417,6 +1631,7 @@ function renderResults(){
     }
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
+    box.appendChild(opportunitySection(okRows));
     box.appendChild(collectionTable(okRows));
     box.appendChild(urlTable(okRows));
   }
@@ -1655,6 +1870,89 @@ function tilesFor(rows, strategy){
   return wrap;
 }
 
+/* Opportunities: what to actually fix, rolled up across the sample. */
+function opportunitySection(rows){
+  const wrap = el('div');
+  const opps = aggregateOpportunities(rows);
+  const lcpEls = aggregateLcpElements(rows);
+  const tp = aggregateThirdParty(rows);
+  if(!opps.length && !lcpEls.length) return wrap;
+
+  const h = el('h3','', 'Opportunities');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Lighthouse findings across the ' + rows.length +
+    ' measurements in this run. Figures are per page, which is what a fix actually returns; the order is by total impact, so a small saving on every page outranks a large one on a single page. Expand a row for the files responsible.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Finding</th><th class="n">Pages hit</th>' +
+    '<th class="n">Time a page</th><th class="n">Bytes a page</th><th>What to do</th></tr></thead><tbody>';
+  opps.forEach((o, i) => {
+    html += '<tr data-opp="' + i + '"' + (o.resources.length ? ' style="cursor:pointer"' : '') + '>' +
+      '<td><b>' + esc(o.label) + '</b>' + (o.resources.length ? ' <span class="tag">' + o.resources.length + ' files</span>' : '') + '</td>' +
+      '<td class="n">' + o.pages + ' of ' + rows.length + '</td>' +
+      '<td class="n">' + (o.avgMs ? esc(fmtMs(o.avgMs)) : '<span style="color:var(--muted)">not timed</span>') + '</td>' +
+      '<td class="n">' + (o.avgBytes ? esc(fmtBytes(o.avgBytes)) : '<span style="color:var(--muted)">n/a</span>') + '</td>' +
+      '<td style="max-width:340px">' + esc(o.fix) + '</td></tr>';
+    if(o.resources.length){
+      html += '<tr class="oppdetail hidden" data-for="' + i + '"><td colspan="5" style="padding:0">' +
+        '<div style="padding:10px 12px 12px;background:var(--plane)">' +
+        '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:7px">Files responsible</div>' +
+        '<table style="min-width:0"><thead><tr><th>Resource</th><th class="n">Pages</th><th class="n">Size</th><th class="n">Cost a page</th></tr></thead><tbody>' +
+        o.resources.slice(0, 15).map(r =>
+          '<tr><td class="urlcell" title="' + esc(r.url) + '" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px">' + esc(r.url) + '</td>' +
+          '<td class="n">' + r.pages + '</td><td class="n">' + esc(fmtBytes(r.bytes)) + '</td><td class="n">' + esc(fmtMs(r.ms)) + '</td></tr>').join('') +
+        '</tbody></table>' +
+        (o.resources.length > 15 ? '<div class="hint" style="margin-top:6px">' + (o.resources.length - 15) + ' more in the export.</div>' : '') +
+        '</div></td></tr>';
+    }
+  });
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  tw.querySelectorAll('tr[data-opp]').forEach(tr => tr.addEventListener('click', () => {
+    const d = tw.querySelector('tr.oppdetail[data-for="' + tr.dataset.opp + '"]');
+    if(d) d.classList.toggle('hidden');
+  }));
+  wrap.appendChild(tw);
+
+  if(lcpEls.length){
+    const h2 = el('h3','', 'What the LCP element actually is');
+    h2.setAttribute('style','margin:24px 0 4px');
+    wrap.appendChild(h2);
+    const p2 = el('p','hint','The element Lighthouse timed as the largest contentful paint, grouped by selector. A single element responsible for LCP across many pages is one fix with wide reach.');
+    p2.setAttribute('style','margin:0 0 10px');
+    wrap.appendChild(p2);
+    const t2 = el('div','tablewrap');
+    t2.innerHTML = '<table><thead><tr><th>Element</th><th>Selector</th><th class="n">Pages</th><th class="n">Mean LCP</th></tr></thead><tbody>' +
+      lcpEls.slice(0, 12).map(e =>
+        '<tr><td><b>' + esc(e.label || '(unnamed)') + '</b>' +
+          (e.snippet ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px">' + esc(e.snippet) + '</div>' : '') + '</td>' +
+        '<td class="urlcell" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px" title="' + esc(e.selector) + '">' + esc(e.selector) + '</td>' +
+        '<td class="n">' + e.pages + '</td><td class="n">' + scoreCell('lcp', e.meanLcp) + '</td></tr>').join('') +
+      '</tbody></table>';
+    wrap.appendChild(t2);
+  }
+
+  if(tp.length){
+    const h3 = el('h3','', 'Third-party cost');
+    h3.setAttribute('style','margin:24px 0 4px');
+    wrap.appendChild(h3);
+    const p3 = el('p','hint','Main-thread blocking time and transfer size each vendor costs on a typical page, from the pages where Lighthouse saw it.');
+    p3.setAttribute('style','margin:0 0 10px');
+    wrap.appendChild(p3);
+    const t3 = el('div','tablewrap');
+    t3.innerHTML = '<table><thead><tr><th>Entity</th><th class="n">Pages</th><th class="n">Blocking a page</th><th class="n">Transferred a page</th></tr></thead><tbody>' +
+      tp.slice(0, 12).map(e =>
+        '<tr><td><b>' + esc(e.entity) + '</b></td><td class="n">' + e.pages + '</td>' +
+        '<td class="n">' + esc(fmtMs(e.avgMs)) + '</td><td class="n">' + esc(fmtBytes(e.avgBytes)) + '</td></tr>').join('') +
+      '</tbody></table>';
+    wrap.appendChild(t3);
+  }
+  return wrap;
+}
+
 function legend(){
   const l = el('div','legend');
   l.innerHTML = '<span><i style="background:var(--good)"></i>Good</span>' +
@@ -1875,6 +2173,57 @@ function buildReportModel(){
     break;   // one summary tab, on the first strategy
   }
 
+  /* Opportunities lead the data tabs: they are the part of the report that names
+     a cause and a fix rather than restating a measurement. */
+  const oppRows = [], resRows = [], lcpRows = [];
+  for(const strat of strategies){
+    const rs = ok.filter(r => r.strategy === strat);
+    if(!rs.length) continue;
+    for(const o of aggregateOpportunities(rs)){
+      oppRows.push([strat, o.label, o.pages, Math.round(o.avgMs) || null, Math.round(o.avgBytes) || null,
+                    Math.round(o.ms) || null, Math.round(o.bytes) || null, o.sites.join(', '), o.fix]);
+      for(const r of o.resources){
+        resRows.push([strat, o.label, r.url, r.pages, Math.round(r.bytes), Math.round(r.ms)]);
+      }
+    }
+    for(const e of aggregateLcpElements(rs)){
+      lcpRows.push([strat, e.label || '(unnamed)', e.selector, e.snippet, e.pages,
+                    toDisplay('lcp', e.meanLcp), e.sites.join(', ')]);
+    }
+  }
+  if(oppRows.length){
+    tab('Opportunities', { kind:'table',
+      headers:['Strategy','Finding','Pages hit','Wasted ms a page','Wasted bytes a page','Wasted ms across sample','Wasted bytes across sample','Sites','What to do'],
+      rows: oppRows, widths:[92,230,80,130,140,150,160,150,420],
+      note:'Lighthouse findings across every measurement. The per-page figures are what a fix actually returns; the across-sample totals are a breadth signal and are not time anyone can save at once. Ordered by total impact. The files responsible are on the next tab.' });
+  }
+  if(resRows.length){
+    tab('Offending resources', { kind:'table',
+      headers:['Strategy','Finding','Resource','Pages hit','Size in bytes','Wasted ms a page'],
+      rows: resRows, widths:[92,210,520,64,110,110], monoCols:[2],
+      note:'Every file named by a finding, with how many sampled pages it appears on. Size and cost are per page, not summed. Sort by Pages hit to find the asset worth fixing first.' });
+  }
+  const tpRows = [];
+  for(const strat of strategies){
+    const rs = ok.filter(r => r.strategy === strat);
+    for(const e of aggregateThirdParty(rs)){
+      tpRows.push([strat, e.entity, e.pages, Math.round(e.avgMs), Math.round(e.avgBytes)]);
+    }
+  }
+  if(tpRows.length){
+    tab('Third parties', { kind:'table',
+      headers:['Strategy','Entity','Pages seen on','Blocking ms a page','Bytes a page'],
+      rows: tpRows, widths:[92,240,110,150,140],
+      note:'What each third-party vendor costs on a typical page. Figures are per page, not summed across the sample.' });
+  }
+  if(lcpRows.length){
+    tab('LCP elements', { kind:'table',
+      headers:['Strategy','Element','Selector','Snippet','Pages','Mean LCP','Sites'],
+      cols:[null,null,null,null,null,'lcp',null],
+      rows: lcpRows, widths:[92,220,300,420,64,110,150], monoCols:[2,3],
+      note:'The element Lighthouse timed as the largest contentful paint, grouped by selector. One element carrying LCP across many pages is one fix with wide reach.' });
+  }
+
   const metricHeaders = SHEET_COLS.map(c => c.label);
   const metricKeys = SHEET_COLS.map(c => c.key);
 
@@ -1986,7 +2335,7 @@ function buildReportModel(){
   });
   tab('Glossary and rubric', { kind:'table', headers:['Metric','What it measures','Good','Needs work','Poor'],
     rows: rubric, widths:[130,430,150,170,150], noBand:true,
-    note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100.' });
+    note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100. On the Opportunities tab, wasted time and bytes are Lighthouse\'s own estimates of what removing the problem would save, summed across every measured page.' });
 
   return { title: reportTitle(), client, strategies, tabs };
 }
