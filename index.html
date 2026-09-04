@@ -284,8 +284,12 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
         </div>
         <div>
           <label class="f">Extra Lighthouse categories</label>
-          <div style="padding-top:5px"><label class="chk"><input type="checkbox" id="allCats"> Accessibility, best practices, SEO</label></div>
-          <div class="hint">Slower per URL. Performance is always measured.</div>
+          <div style="display:flex;gap:14px;flex-wrap:wrap;padding-top:5px">
+            <label class="chk"><input type="checkbox" id="catSeo" checked> SEO</label>
+            <label class="chk"><input type="checkbox" id="catA11y"> Accessibility</label>
+            <label class="chk"><input type="checkbox" id="catBp"> Best practices</label>
+          </div>
+          <div class="hint">Performance is always measured. SEO costs nothing extra per call and returns crawlability, canonical, hreflang, titles and structured data across every sampled page.</div>
         </div>
         <div>
           <label class="f">Sitemap fetch</label>
@@ -409,7 +413,7 @@ PERSIST.forEach(sel => {
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
   n.addEventListener('change', () => localStorage.setItem(k, n.value));
 });
-['#stMobile','#stDesktop','#allCats','#useProxy'].forEach(sel => {
+['#stMobile','#stDesktop','#catSeo','#catA11y','#catBp','#useProxy'].forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.checked = v === '1';
   n.addEventListener('change', () => localStorage.setItem(k, n.checked ? '1' : '0'));
@@ -1359,6 +1363,14 @@ function renderSelection(){
     : '';
 }
 
+function selectedCategories(){
+  const c = ['performance'];
+  if($('#catSeo') && $('#catSeo').checked) c.push('seo');
+  if($('#catA11y') && $('#catA11y').checked) c.push('accessibility');
+  if($('#catBp') && $('#catBp').checked) c.push('best-practices');
+  return c;
+}
+
 function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
 
 function buildGroupsAndSample(){
@@ -1537,6 +1549,129 @@ function aggregateOpportunities(rows){
   return list;
 }
 
+/* ------------------------------------------- aggregations for the new fields */
+
+/* Field data, page level where it exists and origin level otherwise. The two are
+   never averaged together; coverage is reported so the reader knows which they
+   are looking at. */
+function aggregateField(rows, sites){
+  const list = (sites && sites.length ? sites : [{ origin: null, label: 'All pages', primary: true }]);
+  return list.map(s => {
+    const rs = s.origin ? rows.filter(r => r.site === s.origin) : rows;
+    if(!rs.length) return null;
+    const withPage = rs.filter(r => r.data.fieldPage);
+    const origin = (rs.find(r => r.data.fieldOrigin) || {}).data;
+    const keys = ['lcp','cls','inp','ttfb','fcp'];
+    const page = {};
+    for(const k of keys){
+      const vals = withPage.map(r => (r.data.fieldPage.metrics[k] || {}).p75).filter(v => v != null);
+      const good = withPage.map(r => (r.data.fieldPage.metrics[k] || {}).good).filter(v => v != null);
+      if(vals.length) page[k] = { p75: mean(vals), good: mean(good), n: vals.length };
+    }
+    const org = {};
+    if(origin && origin.fieldOrigin){
+      for(const k of keys){
+        const m = origin.fieldOrigin.metrics[k];
+        if(m) org[k] = { p75: m.p75, good: m.good, ni: m.ni, poor: m.poor, category: m.category };
+      }
+    }
+    return {
+      site: s, pagesWithField: withPage.length, pagesMeasured: rs.length,
+      page, origin: org,
+      originOverall: origin && origin.fieldOrigin ? origin.fieldOrigin.overall : null,
+      hasOrigin: Object.keys(org).length > 0
+    };
+  }).filter(Boolean);
+}
+
+/* SEO and quality checks that failed, rolled up across the sample. */
+function aggregateChecks(rows){
+  const by = new Map();
+  for(const r of rows){
+    for(const c of (r.data.checks || [])){
+      const k = r.siteLabel + '|' + c.id;
+      if(!by.has(k)) by.set(k, { site: r.siteLabel, id: c.id, label: c.label, manual: c.manual,
+                                 pages: 0, examples: new Set(), items: new Set() });
+      const e = by.get(k);
+      e.pages++;
+      if(e.examples.size < 6) e.examples.add(r.path);
+      c.items.forEach(i => { if(e.items.size < 10) e.items.add(i); });
+    }
+  }
+  return Array.from(by.values())
+    .map(e => Object.assign(e, { examples: Array.from(e.examples), items: Array.from(e.items) }))
+    .sort((a, b) => b.pages - a.pages || a.label.localeCompare(b.label));
+}
+
+/* A sampled URL whose final URL differs from the one the sitemap advertised is
+   a redirect, which is a finding in itself and costs no extra call to detect. */
+function redirectRows(rows){
+  const seen = new Set(); const out = [];
+  for(const r of rows){
+    const req = r.data.requestedUrl, fin = r.data.mainDocumentUrl || r.data.finalUrl;
+    if(!req || !fin) continue;
+    const norm = u => String(u).replace(/#.*$/, '').replace(/\/$/, '');
+    if(norm(req) === norm(fin)) continue;
+    const k = norm(req) + '>' + norm(fin);
+    if(seen.has(k)) continue;
+    seen.add(k);
+    let kind = 'redirect';
+    try{
+      const a = new URL(req), b = new URL(fin);
+      if(a.protocol !== b.protocol) kind = 'protocol';
+      else if(a.host !== b.host) kind = 'host';
+      else if(a.pathname.replace(/\/$/, '') !== b.pathname.replace(/\/$/, '')) kind = 'path';
+      else kind = 'trailing slash';
+    }catch(e){}
+    out.push({ site: r.siteLabel, from: req, to: fin, kind });
+  }
+  return out.sort((a, b) => a.from.localeCompare(b.from));
+}
+
+/* Page weight by resource type, which turns "the page is heavy" into "images are
+   two thirds of it". */
+const COMP_TYPES = ['image','script','stylesheet','font','document','media','third-party','other'];
+function aggregateComposition(rows){
+  const by = new Map();
+  for(const r of rows){
+    const c = r.data.composition;
+    if(!c || !c.byType) continue;
+    if(!by.has(r.siteLabel)) by.set(r.siteLabel, { site: r.siteLabel, n: 0, types: {}, requests: [], rtt: [], latency: [] });
+    const e = by.get(r.siteLabel);
+    e.n++;
+    for(const [t, v] of Object.entries(c.byType)){
+      if(!e.types[t]) e.types[t] = { bytes: 0, count: 0 };
+      e.types[t].bytes += v.bytes; e.types[t].count += v.count;
+    }
+    if(c.requests != null) e.requests.push(c.requests);
+    if(c.rtt != null) e.rtt.push(c.rtt);
+    if(c.serverLatency != null) e.latency.push(c.serverLatency);
+  }
+  return Array.from(by.values()).map(e => {
+    const types = Object.entries(e.types)
+      .map(([t, v]) => ({ type: t, bytes: v.bytes / e.n, count: v.count / e.n }))
+      .filter(x => x.type !== 'total')
+      .sort((a, b) => b.bytes - a.bytes);
+    const total = types.reduce((s, x) => s + x.bytes, 0);
+    return { site: e.site, pages: e.n, types, total,
+             requests: mean(e.requests), rtt: mean(e.rtt), latency: mean(e.latency) };
+  });
+}
+
+/* Warnings Lighthouse raised about its own runs, and Google's bot check. */
+function collectRunIssues(rows){
+  const warn = new Map(); let captcha = null;
+  for(const r of rows){
+    for(const w of (r.data.runWarnings || [])){
+      const k = r.siteLabel + '|' + w;
+      if(!warn.has(k)) warn.set(k, { site: r.siteLabel, text: w, pages: 0 });
+      warn.get(k).pages++;
+    }
+    if(r.data.captcha && r.data.captcha !== 'CAPTCHA_NOT_NEEDED') captcha = r.data.captcha;
+  }
+  return { warnings: Array.from(warn.values()).sort((a, b) => b.pages - a.pages), captcha };
+}
+
 function aggregateLcpElements(rows){
   const by = new Map();
   for(const r of rows){
@@ -1584,6 +1719,113 @@ const fmtMs = m => {
 /* --------------------------------------------------------- PSI API runner */
 const PSI_ENDPOINT = 'https://pagespeedonline.googleapis.com/pagespeedonline/v5/runPagespeed';
 
+/* ------------------------------------------------------ field data (CrUX) */
+/* PSI returns two loading experiences: one for the URL and one for the origin.
+   Page-level data is missing for most URLs because low-traffic pages have no
+   CrUX sample, while origin-level exists for almost any site with real traffic.
+   Reporting "no field data" while the origin block sits in the same response
+   was throwing away the only measurement here that correlates with ranking. */
+const CRUX_KEYS = {
+  LARGEST_CONTENTFUL_PAINT_MS: { key:'lcp', div:1 },
+  CUMULATIVE_LAYOUT_SHIFT_SCORE: { key:'cls', div:100 },
+  INTERACTION_TO_NEXT_PAINT: { key:'inp', div:1 },
+  EXPERIMENTAL_TIME_TO_FIRST_BYTE: { key:'ttfb', div:1 },
+  FIRST_CONTENTFUL_PAINT_MS: { key:'fcp', div:1 }
+};
+function extractLoadingExperience(le){
+  if(!le || typeof le !== 'object') return null;
+  const out = { id: le.id || null, overall: le.overall_category || null,
+                initialUrl: le.initial_url || null, metrics: {} };
+  const m = le.metrics || {};
+  for(const [apiKey, spec] of Object.entries(CRUX_KEYS)){
+    const src = m[apiKey];
+    if(!src) continue;
+    const dist = Array.isArray(src.distributions) ? src.distributions : [];
+    /* distributions carry the share of real users in each band, which is what
+       Google's own assessment uses. The p75 alone hides whether a site is
+       uniformly mediocre or bimodal. */
+    const prop = i => (dist[i] && typeof dist[i].proportion === 'number') ? dist[i].proportion : null;
+    out.metrics[spec.key] = {
+      p75: typeof src.percentile === 'number' ? src.percentile / spec.div : null,
+      category: src.category || null,
+      good: prop(0), ni: prop(1), poor: prop(2)
+    };
+  }
+  return Object.keys(out.metrics).length ? out : null;
+}
+
+/* --------------------------------------------------------- SEO and quality */
+const SEO_AUDITS = [
+  { id:'is-crawlable',       label:'Page is blocked from indexing' },
+  { id:'robots-txt',         label:'robots.txt is invalid' },
+  { id:'canonical',          label:'Canonical is invalid or points elsewhere' },
+  { id:'hreflang',           label:'hreflang is invalid' },
+  { id:'document-title',     label:'Missing or empty title' },
+  { id:'meta-description',   label:'Missing meta description' },
+  { id:'link-text',          label:'Uninformative link text' },
+  { id:'crawlable-anchors',  label:'Links are not crawlable' },
+  { id:'structured-data',    label:'Structured data needs manual review' },
+  { id:'image-alt',          label:'Images missing alt text' },
+  { id:'viewport',           label:'No viewport meta tag' },
+  { id:'http-status-code',   label:'Unsuccessful HTTP status' }
+];
+const QUALITY_AUDITS = [
+  { id:'errors-in-console',  label:'Browser errors in the console' },
+  { id:'no-document-write',  label:'Uses document.write' },
+  { id:'deprecations',       label:'Uses deprecated APIs' },
+  { id:'bf-cache',           label:'Blocked from the back/forward cache' },
+  { id:'unsized-images',     label:'Images without explicit dimensions' },
+  { id:'non-composited-animations', label:'Animations not composited' },
+  { id:'third-party-facades',label:'Third-party embeds could be facaded' },
+  { id:'valid-source-maps',  label:'Missing source maps' },
+  { id:'inspector-issues',   label:'Issues logged in Chrome DevTools' }
+];
+function extractChecks(lr){
+  const audits = lr.audits || {};
+  const out = [];
+  for(const spec of SEO_AUDITS.concat(QUALITY_AUDITS)){
+    const a = audits[spec.id];
+    if(!a) continue;
+    if(a.scoreDisplayMode === 'notApplicable') continue;
+    const manual = a.scoreDisplayMode === 'manual' || a.scoreDisplayMode === 'informative';
+    const failed = (typeof a.score === 'number') ? a.score < 0.9 : false;
+    if(!failed && !manual) continue;
+    if(manual && spec.id !== 'structured-data') continue;
+    const items = (((a.details || {}).items) || []).slice(0, 5)
+      .map(it => it.node && (it.node.selector || it.node.snippet) ? (it.node.selector || it.node.snippet)
+                : (it.source && (it.source.url || it.source)) || it.url || it.href || null)
+      .filter(Boolean).map(v => String(v).slice(0, 200));
+    out.push({ id: spec.id, label: spec.label, score: typeof a.score === 'number' ? a.score : null,
+               manual, items });
+  }
+  return out;
+}
+
+/* ------------------------------------------------------- page composition */
+function extractComposition(lr){
+  const audits = lr.audits || {};
+  const rs = audits['resource-summary'];
+  const byType = {};
+  for(const it of (((rs || {}).details || {}).items || [])){
+    if(!it.resourceType) continue;
+    byType[it.resourceType] = { bytes: num(it.transferSize), count: num(it.requestCount) };
+  }
+  const d = ((audits['diagnostics'] || {}).details || {}).items || [];
+  const diag = d[0] || {};
+  return {
+    byType,
+    requests: num(diag.numRequests) || null,
+    scripts: num(diag.numScripts) || null,
+    stylesheets: num(diag.numStylesheets) || null,
+    fonts: num(diag.numFonts) || null,
+    tasks: num(diag.numTasks) || null,
+    rtt: num(diag.rtt) || null,
+    serverLatency: num(diag.maxServerLatency) || null,
+    throughput: num(diag.throughput) || null,
+    totalBytes: num(diag.totalByteWeight) || null
+  };
+}
+
 function extractRun(json){
   const lr = json.lighthouseResult || {};
   const a = lr.audits || {};
@@ -1610,8 +1852,24 @@ function extractRun(json){
     opps: extractOpportunities(lr),
     diag: extractDiagnostics(lr),
     stackPacks: extractStackPacks(lr),
-    finalUrl: lr.finalDisplayedUrl || lr.finalUrl || json.id || null,
-    fetchedAt: lr.fetchTime || null,
+    checks: extractChecks(lr),
+    composition: extractComposition(lr),
+
+    /* field data: page level where Google has it, origin level otherwise, and
+       always labelled so the two are never silently mixed */
+    fieldPage: extractLoadingExperience(json.loadingExperience),
+    fieldOrigin: extractLoadingExperience(json.originLoadingExperience),
+
+    /* provenance and validity */
+    requestedUrl: lr.requestedUrl || null,
+    finalUrl: lr.finalDisplayedUrl || lr.mainDocumentUrl || lr.finalUrl || json.id || null,
+    mainDocumentUrl: lr.mainDocumentUrl || lr.finalUrl || null,
+    runWarnings: Array.isArray(lr.runWarnings) ? lr.runWarnings.map(w => stripMd(String(w))).slice(0, 6) : [],
+    captcha: json.captchaResult || null,
+    formFactor: ((lr.configSettings || {}).formFactor) || null,
+    throttlingMethod: ((lr.configSettings || {}).throttlingMethod) || null,
+    runMs: ((lr.timing || {}).total) || null,
+    fetchedAt: lr.fetchTime || json.analysisUTCTimestamp || null,
     lhVersion: lr.lighthouseVersion || null
   };
 }
@@ -1716,6 +1974,13 @@ async function psiRun(url, strategy, key, categories){
 
       if(r.ok){
         if(!json || !json.lighthouseResult) throw new Error('No Lighthouse result returned');
+        const rte = json.lighthouseResult.runtimeError;
+        /* Lighthouse documents runtimeError as "serious enough that this result
+           may need to be discarded", so it is treated as a failed measurement
+           rather than averaged into the numbers. */
+        if(rte && rte.code && rte.code !== 'NO_ERROR'){
+          throw new Error(rte.code + ': ' + stripMd(rte.message || 'Lighthouse reported the run as unusable'));
+        }
         return extractRun(json);
       }
 
@@ -1770,7 +2035,7 @@ async function runPool(items, limit, worker, onDone){
 
 async function runTest(){
   const key = $('#key').value.trim();
-  const cats = ['performance'].concat($('#allCats').checked ? ['accessibility','best-practices','seo'] : []);
+  const cats = selectedCategories();
   const strategies = [];
   if($('#stMobile').checked) strategies.push('mobile');
   if($('#stDesktop').checked) strategies.push('desktop');
@@ -1881,7 +2146,7 @@ async function retryFailures(strategyFilter){
   const failed = state.results.filter(r => !r.ok && (!strategyFilter || r.strategy === strategyFilter) && r.item);
   if(!failed.length) return;
   const key = $('#key').value.trim();
-  const cats = ['performance'].concat($('#allCats').checked ? ['accessibility','best-practices','seo'] : []);
+  const cats = selectedCategories();
   state.running = true; state.cancel = false;
   $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
   $('#progWrap').classList.remove('hidden'); $('#progBar').style.width = '0%';
@@ -1951,9 +2216,14 @@ function renderResults(){
     }
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
+    box.appendChild(runIssuesSection(okRows, rows));
+    box.appendChild(fieldSection(okRows));
     box.appendChild(chartsSection(okRows));
+    box.appendChild(compositionSection(okRows));
     box.appendChild(stackSection(okRows));
     box.appendChild(opportunitySection(okRows));
+    box.appendChild(checksSection(okRows));
+    box.appendChild(redirectSection(okRows));
     box.appendChild(collectionTable(okRows));
     box.appendChild(urlTable(okRows));
   }
@@ -2290,6 +2560,165 @@ function chartCard(title, svg, legend, cls){
   return c;
 }
 
+
+/* Field data leads, because it is the measurement that correlates with ranking. */
+function fieldSection(rows){
+  const wrap = el('div');
+  const sites = multi() ? state.sites.filter(s => rows.some(r => r.site === s.origin)) : [];
+  const agg = aggregateField(rows, sites);
+  if(!agg.length || !agg.some(a => a.hasOrigin || Object.keys(a.page).length)) return wrap;
+
+  const h = el('h3','', 'Real users');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Chrome User Experience Report data, the 28-day field measurement Google actually assesses Core Web Vitals against. Page-level data exists only for URLs with enough traffic, so origin-level is shown alongside and the two are never mixed. Everything else in this report is lab data from a single synthetic run.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+
+  const keys = ['lcp','cls','inp','ttfb'];
+  const tw = el('div','tablewrap');
+  let html = '<table><thead><tr><th>Site</th><th>Scope</th><th class="n">Pages with data</th>' +
+    keys.map(k => '<th class="n">' + esc(METRICS[k].label) + '</th>').join('') +
+    '<th>Verdict</th></tr></thead><tbody>';
+  for(const a of agg){
+    if(Object.keys(a.page).length){
+      html += '<tr' + (multi() && a.site.primary ? ' class="primary"' : '') + '><td><b>' + esc(a.site.label) + '</b></td>' +
+        '<td>Sampled pages</td><td class="n">' + a.pagesWithField + ' of ' + a.pagesMeasured + '</td>' +
+        keys.map(k => '<td class="n">' + (a.page[k] ? scoreCell(k, a.page[k].p75) : '<span style="color:var(--muted)">–</span>') + '</td>').join('') +
+        '<td><span style="color:var(--muted);font-size:11.5px">mean of per-page p75</span></td></tr>';
+    }
+    if(a.hasOrigin){
+      html += '<tr' + (multi() && a.site.primary ? ' class="primary"' : '') + '><td><b>' + esc(a.site.label) + '</b></td>' +
+        '<td>Whole origin</td><td class="n">all traffic</td>' +
+        keys.map(k => '<td class="n">' + (a.origin[k]
+          ? scoreCell(k, a.origin[k].p75) + (a.origin[k].good != null
+              ? '<div style="font-size:11px;color:var(--muted)">' + Math.round(a.origin[k].good * 100) + '% good</div>' : '')
+          : '<span style="color:var(--muted)">–</span>') + '</td>').join('') +
+        '<td>' + (a.originOverall ? '<span class="st ' + (a.originOverall === 'FAST' ? 'good' : a.originOverall === 'AVERAGE' ? 'ni' : 'poor') +
+          '"><span class="dot"></span>' + esc(a.originOverall) + '</span>' : '–') + '</td></tr>';
+    }
+  }
+  html += '</tbody></table>';
+  tw.innerHTML = html;
+  wrap.appendChild(tw);
+
+  const withGood = agg.filter(a => a.hasOrigin && Object.values(a.origin).some(m => m.good != null));
+  if(withGood.length){
+    const n = el('div','note');
+    n.innerHTML = '<b>Share of real users in the good band</b><br>' + withGood.map(a =>
+      (multi() ? '<b>' + esc(a.site.label) + '</b>: ' : '') +
+      keys.filter(k => a.origin[k] && a.origin[k].good != null)
+          .map(k => METRICS[k].label + ' ' + Math.round(a.origin[k].good * 100) + '%').join(', ')).join('<br>') +
+      '<br><span style="color:var(--muted)">This proportion, not the p75, is what a client feels. A p75 inside the good band with only 60 percent of users in it means a substantial minority having a bad time.</span>';
+    wrap.appendChild(n);
+  }
+  return wrap;
+}
+
+/* Run validity: warnings Lighthouse raised, and anything discarded outright. */
+function runIssuesSection(rows, allRows){
+  const wrap = el('div');
+  const { warnings, captcha } = collectRunIssues(rows);
+  const discarded = allRows.filter(r => !r.ok && /^[A-Z_]+:/.test(r.error || ''));
+  if(!warnings.length && !captcha && !discarded.length) return wrap;
+  const d = el('div','note');
+  let html = '<b>Run validity</b>';
+  if(captcha) html += '<div style="margin-top:6px">Google returned a captcha result of <span class="mono">' + esc(captcha) + '</span>, which means it treated these requests as automated. Results may be degraded.</div>';
+  if(discarded.length) html += '<div style="margin-top:6px"><b>' + discarded.length + ' measurement' + (discarded.length > 1 ? 's' : '') +
+    ' discarded</b> because Lighthouse reported a runtime error. Those are excluded from every average rather than counted as a bad score.</div>';
+  if(warnings.length) html += '<div style="margin-top:6px">Lighthouse raised warnings on some runs:</div>' +
+    warnings.slice(0, 5).map(w => '<div style="margin-top:3px;font-size:12.5px">' +
+      (multi() ? '<b>' + esc(w.site) + '</b> · ' : '') + '<span class="tag">' + w.pages + ' pages</span> ' + esc(w.text) + '</div>').join('');
+  d.innerHTML = html;
+  wrap.appendChild(d);
+  return wrap;
+}
+
+/* SEO and quality checks. Free with the SEO category, and across a 100-page
+   sample this is a technical crawl the run already paid for. */
+function checksSection(rows){
+  const wrap = el('div');
+  const checks = aggregateChecks(rows);
+  if(!checks.length) return wrap;
+  const seoIds = new Set(SEO_AUDITS.map(a => a.id));
+  const seo = checks.filter(c => seoIds.has(c.id));
+  const quality = checks.filter(c => !seoIds.has(c.id));
+
+  const block = (title, list, blurb) => {
+    if(!list.length) return;
+    const h = el('h3','', title);
+    h.setAttribute('style','margin:26px 0 4px');
+    wrap.appendChild(h);
+    const p = el('p','hint', blurb);
+    p.setAttribute('style','margin:0 0 12px');
+    wrap.appendChild(p);
+    const tw = el('div','tablewrap');
+    tw.innerHTML = '<table><thead><tr>' + (multi() ? '<th>Site</th>' : '') +
+      '<th>Check</th><th class="n">Pages</th><th>Examples</th></tr></thead><tbody>' +
+      list.map(c => '<tr>' + (multi() ? '<td>' + esc(c.site) + '</td>' : '') +
+        '<td><b>' + esc(c.label) + '</b>' + (c.manual ? ' <span class="tag">manual</span>' : '') +
+        '<div style="font-size:11px;color:var(--muted);font-family:ui-monospace,Menlo,monospace">' + esc(c.id) + '</div></td>' +
+        '<td class="n">' + c.pages + '</td>' +
+        '<td style="font-size:11.5px;color:var(--ink-2)">' + esc(c.examples.slice(0, 4).join(', ')) +
+        (c.items.length ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:340px">' +
+          esc(c.items.slice(0, 3).join('  ')) + '</div>' : '') + '</td></tr>').join('') +
+      '</tbody></table>';
+    wrap.appendChild(tw);
+  };
+  block('SEO checks', seo, 'Failing SEO audits across the sample. These come free with the SEO category and cost nothing extra per call; across a hundred sampled pages they amount to a technical crawl the run already paid for.');
+  block('Quality checks', quality, 'Best-practice audits that failed. Console errors, back/forward cache eligibility and unsized images all show up here.');
+  return wrap;
+}
+
+/* Sitemap URLs that redirect. */
+function redirectSection(rows){
+  const wrap = el('div');
+  const reds = redirectRows(rows);
+  if(!reds.length) return wrap;
+  const h = el('h3','', 'Sitemap URLs that redirect');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','The sitemap advertised one URL and the browser ended on another. Detected for free by comparing what was requested against the final document URL. A sitemap full of redirects wastes crawl budget and dilutes the signal from internal links.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+  const tw = el('div','tablewrap');
+  tw.innerHTML = '<table><thead><tr>' + (multi() ? '<th>Site</th>' : '') +
+    '<th>In the sitemap</th><th>Ended at</th><th>Difference</th></tr></thead><tbody>' +
+    reds.slice(0, 40).map(r => '<tr>' + (multi() ? '<td>' + esc(r.site) + '</td>' : '') +
+      '<td class="urlcell" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px" title="' + esc(r.from) + '">' + esc(r.from) + '</td>' +
+      '<td class="urlcell" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px" title="' + esc(r.to) + '">' + esc(r.to) + '</td>' +
+      '<td><span class="tag">' + esc(r.kind) + '</span></td></tr>').join('') +
+    '</tbody></table>';
+  wrap.appendChild(tw);
+  if(reds.length > 40) wrap.appendChild(el('p','hint', reds.length - 40 + ' more in the export.'));
+  return wrap;
+}
+
+/* Page weight by resource type. */
+function compositionSection(rows){
+  const wrap = el('div');
+  const comp = aggregateComposition(rows);
+  if(!comp.length || !comp.some(c => c.total > 0)) return wrap;
+  const th = activeTheme();
+  const h = el('h3','', 'What the weight is made of');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Mean transferred bytes per page by resource type. Turns "the page is heavy" into which thing to cut first.');
+  p.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p);
+  for(const c of comp){
+    const card = el('div','chartcard wide');
+    card.innerHTML = (multi() ? '<div class="ctitle">' + esc(c.site) + ' · ' + esc(fmtBytes(c.total)) + ' a page across ' +
+      (c.requests ? Math.round(c.requests) + ' requests' : c.pages + ' pages') + '</div>' : '') +
+      svgBars(c.types.slice(0, 8).map(t => ({
+        label: t.type + ' (' + Math.round(t.count) + ')', value: t.bytes,
+        display: fmtBytes(t.bytes) + '  ' + Math.round(t.bytes / c.total * 100) + '%',
+        color: th.series[0]
+      })), { theme: th, width: 660, labelW: 170 });
+    wrap.appendChild(card);
+  }
+  return wrap;
+}
 
 /* What each site is built on, and the plugin-level detail that changes the fix. */
 function stackSection(rows){
@@ -2890,8 +3319,14 @@ function ctx(rows, sites){
     if(!collections.has(k)) collections.set(k, []);
     collections.get(k).push(x);
   });
+  const field = aggregateField(rows, sites && sites.length > 1 ? sites : []);
+  const checks = aggregateChecks(rows);
+  const redirects = redirectRows(rows);
+  const composition = aggregateComposition(rows);
   return {
     rows, sites, n, opp: id => byId.get(id) || null, opps, lcpEls, tp,
+    field, checks, redirects, composition,
+    check: id => checks.filter(c => c.id === id),
     perf: m('perf'), lcp: m('lcp'), cls: m('cls'), tbt: m('tbt'), ttfb: m('ttfb'), fcp: m('fcp'),
     collections: Array.from(collections).map(([k, rs]) => ({
       name: k, pages: rs.length, perf: mean(rs.map(x => x.data.perf)), lcp: mean(rs.map(x => x.data.lcp))
@@ -3113,6 +3548,93 @@ const RULES = [
                 'Treat the leading site as the target rather than the 90-point threshold; it proves the number is reachable in this sector.']
   },
   {
+    id: 'field-vs-lab', audit: null,
+    when: c => c.field.some(f => f.hasOrigin && Object.values(f.origin).some(m => m.category === 'SLOW' || (m.good != null && m.good < 0.75))),
+    severity: c => c.field.some(f => f.originOverall === 'SLOW') ? 'critical' : 'serious',
+    risk: 'low', effort: 'medium',
+    title: c => {
+      const f = c.field.find(x => x.hasOrigin);
+      const bad = Object.entries(f.origin).filter(([, m]) => m.good != null && m.good < 0.75).map(([k]) => METRICS[k].label);
+      return 'Real users fail Core Web Vitals on ' + (bad.length ? bad.join(' and ') : 'at least one metric');
+    },
+    thesis: () => 'This is the measurement Google assesses, and it disagrees with a lab score in the site\'s favour nowhere.',
+    evidence: c => {
+      const out = [];
+      for(const f of c.field){
+        if(!f.hasOrigin) continue;
+        out.push([f.site.label + ' overall', f.originOverall || 'no verdict']);
+        for(const [k, m] of Object.entries(f.origin)){
+          if(m.good == null) continue;
+          out.push([f.site.label + ' ' + METRICS[k].label,
+            Math.round(m.good * 100) + '% of users in the good band, p75 ' + fmt(k, m.p75)]);
+        }
+      }
+      return out.slice(0, 10);
+    },
+    why: 'Lab figures are one synthetic run on Google\'s hardware. The Chrome User Experience Report is 28 days of real visits on real devices and connections, and it is what the Core Web Vitals assessment is computed from. Where the two disagree, the field data is the one with consequences.',
+    fix: () => ['Treat the field figures as the target and the lab findings below as the diagnosis of why they are where they are.',
+                'Field data lags by up to 28 days, so do not expect a fix to show here for a month.',
+                'If page-level coverage is thin, the origin figure is still the one being assessed.']
+  },
+  {
+    id: 'sitemap-redirects', audit: null,
+    when: c => c.redirects.length >= 2,
+    severity: c => c.redirects.length > c.n * 0.25 ? 'serious' : 'moderate',
+    risk: 'low', effort: 'low',
+    title: c => c.redirects.length + ' sampled URLs in the sitemap redirect elsewhere',
+    thesis: () => 'The sitemap is advertising URLs that are not the destination.',
+    evidence: c => {
+      const kinds = {};
+      c.redirects.forEach(r => { kinds[r.kind] = (kinds[r.kind] || 0) + 1; });
+      return [['Redirecting URLs found', c.redirects.length + ' of ' + c.n + ' sampled']]
+        .concat(Object.entries(kinds).map(([k, v]) => [k + ' differences', String(v)]))
+        .concat(c.redirects.slice(0, 4).map(r => [r.from, 'lands on ' + r.to]));
+    },
+    why: 'Every redirected sitemap entry spends crawl budget twice for one page and adds a hop to the first byte for anyone arriving on that link. It also signals that the sitemap is generated from something other than the live URL set, which usually means it is stale in other ways too.',
+    fix: () => ['Regenerate the sitemap from the canonical URL of each page rather than from the source record.',
+                'Fix the pattern rather than the entries: nearly all of these are one rule, usually a trailing slash or a protocol.',
+                'Re-submit in Search Console once the sitemap is clean.']
+  },
+  {
+    id: 'crawlability', audit: null,
+    when: c => c.check('is-crawlable').length > 0 || c.check('http-status-code').length > 0,
+    severity: () => 'critical', risk: 'low', effort: 'low',
+    title: c => {
+      const a = c.check('is-crawlable'), b = c.check('http-status-code');
+      const n = a.concat(b).reduce((s, x) => s + x.pages, 0);
+      return n + ' sampled pages cannot be indexed';
+    },
+    thesis: () => 'Performance work on a page search engines will not index is wasted.',
+    evidence: c => c.check('is-crawlable').concat(c.check('http-status-code')).map(x =>
+      [x.site + ' ' + x.label, x.pages + ' pages, for example ' + x.examples.slice(0, 3).join(', ')]),
+    why: 'A page blocked by robots directives or returning an unsuccessful status is invisible regardless of how fast it is. This outranks every other finding in this report for the pages it affects.',
+    fix: () => ['Check the robots meta tag and X-Robots-Tag header on the affected templates.',
+                'Confirm the pages are meant to be excluded. If they are, remove them from the sitemap; a sitemap should not advertise pages that are not indexable.']
+  },
+  {
+    id: 'weight-concentration', audit: 'total-byte-weight',
+    when: c => c.composition.some(x => x.total > 800000 && x.types.length && x.types[0].bytes / x.total > 0.5),
+    severity: c => c.composition.some(x => x.total > 3000000) ? 'serious' : 'moderate',
+    risk: 'low', effort: 'medium',
+    title: c => {
+      const x = c.composition.find(y => y.types.length && y.types[0].bytes / y.total > 0.5);
+      return Math.round(x.types[0].bytes / x.total * 100) + '% of page weight is ' + x.types[0].type;
+    },
+    thesis: () => 'The weight is concentrated in one resource type, which makes it a single fix rather than a programme.',
+    evidence: c => {
+      const out = [];
+      for(const x of c.composition){
+        out.push([x.site + ' total', fmtBytes(x.total) + ' a page across ' + (x.requests ? Math.round(x.requests) + ' requests' : x.pages + ' pages')]);
+        x.types.slice(0, 4).forEach(t => out.push([x.site + ' ' + t.type,
+          fmtBytes(t.bytes) + ', ' + Math.round(t.bytes / x.total * 100) + '% of weight, ' + Math.round(t.count) + ' requests']));
+      }
+      return out.slice(0, 10);
+    },
+    why: 'Total page weight is a symptom that tells you nothing on its own. The breakdown tells you which team to send the work to, and when one type is more than half the payload the argument for fixing it needs no further analysis.',
+    fix: () => ['Attack the dominant type first; the others will not move the number.',
+                'Re-measure after, because the composition shifts once the largest slice is cut.']
+  },
+  {
     id: 'cache-ttl', audit: 'uses-long-cache-ttl',
     when: c => !!c.opp('uses-long-cache-ttl'),
     severity: () => 'minor', risk: 'low', effort: 'low',
@@ -3239,7 +3761,7 @@ function buildReportModel(){
     ['Strategies', strategies.join(' and ')],
     ['Pages measured', String(uniq(ok.map(r => r.url)).length)],
     ['Measurements taken', String(ok.length) + (failed.length ? ' (' + failed.length + ' failed)' : '')],
-    ['Lighthouse categories', $('#allCats').checked ? 'Performance, accessibility, best practices, SEO' : 'Performance']
+    ['Lighthouse categories', selectedCategories().join(', ')]
   ];
   if(state.compareGroups.length && multi()){
     params.push(['Paired collections', state.compareGroups.map(g =>
@@ -3348,6 +3870,70 @@ function buildReportModel(){
         x.values[k] == null ? null : r0(x.values[k])))),
       widths:[150].concat(chartSites.map(() => 120)),
       note:'Each metric scored 0 to 100 against Google\'s thresholds, where 100 is at or better than good. This is the source range for the charts on this tab. Google Sheets has no radar chart type, so the profile is drawn as grouped columns; the radar form appears in the app and in the PDF report.' });
+  }
+
+  /* Field data first: it is the measurement Google assesses. */
+  const fieldRows = [];
+  for(const strat of strategies){
+    const rs = ok.filter(r => r.strategy === strat);
+    if(!rs.length) continue;
+    for(const f of aggregateField(rs, state.sites.length > 1 ? state.sites : [])){
+      const km = ['lcp','cls','inp','ttfb','fcp'];
+      if(Object.keys(f.page).length){
+        fieldRows.push([strat, f.site.label, 'Sampled pages', f.pagesWithField + ' of ' + f.pagesMeasured, '']
+          .concat(km.map(k => f.page[k] ? toDisplay(k, f.page[k].p75) : null))
+          .concat(km.map(k => f.page[k] && f.page[k].good != null ? Math.round(f.page[k].good * 100) : null)));
+      }
+      if(f.hasOrigin){
+        fieldRows.push([strat, f.site.label, 'Whole origin', 'all traffic', f.originOverall || '']
+          .concat(km.map(k => f.origin[k] ? toDisplay(k, f.origin[k].p75) : null))
+          .concat(km.map(k => f.origin[k] && f.origin[k].good != null ? Math.round(f.origin[k].good * 100) : null)));
+      }
+    }
+  }
+  if(fieldRows.length){
+    const km = ['lcp','cls','inp','ttfb','fcp'];
+    tab('Real users', { kind:'table',
+      headers:['Strategy','Site','Scope','Coverage','Verdict']
+        .concat(km.map(k => METRICS[k].label + ' p75'))
+        .concat(km.map(k => METRICS[k].label + ' % good')),
+      cols: [null,null,null,null,null].concat(km).concat(km.map(() => null)),
+      rows: fieldRows, widths:[92,150,130,120,110,110,100,110,110,110,120,110,120,120,120],
+      note:'Chrome User Experience Report: 28 days of real visits, and the measurement the Core Web Vitals assessment is computed from. Page-level data exists only for URLs with enough traffic, so origin-level is listed separately rather than mixed in. The percent-good columns are the share of real users in the good band, which is what the assessment uses.' });
+  }
+
+  const checkRows = [];
+  for(const strat of strategies){
+    for(const c of aggregateChecks(ok.filter(r => r.strategy === strat))){
+      checkRows.push([strat, c.site, SEO_AUDITS.some(a => a.id === c.id) ? 'SEO' : 'Quality',
+                      c.label, c.id, c.pages, c.manual ? 'manual review' : 'failed',
+                      c.examples.join(', '), c.items.slice(0, 5).join('  |  ')]);
+    }
+  }
+  if(checkRows.length){
+    tab('SEO and quality', { kind:'table',
+      headers:['Strategy','Site','Kind','Check','Audit id','Pages','Result','Example pages','Details'],
+      rows: checkRows, widths:[92,140,80,260,180,70,110,320,420], monoCols:[4,8],
+      note:'Failing SEO and best-practice audits across the sample. These come back with the SEO and best-practices categories at no extra cost per call.' });
+  }
+
+  const redRows = redirectRows(ok).map(r => [r.site, r.from, r.to, r.kind]);
+  if(redRows.length){
+    tab('Redirects', { kind:'table', headers:['Site','In the sitemap','Ended at','Difference'],
+      rows: redRows, widths:[140,420,420,130], monoCols:[1,2],
+      note:'Sampled URLs where the sitemap advertised one address and the browser finished on another. Detected by comparing the requested URL against the final document URL, at no extra cost.' });
+  }
+
+  const compRows = [];
+  for(const c of aggregateComposition(ok.filter(r => r.strategy === strategies[0]))){
+    for(const t of c.types){
+      compRows.push([c.site, t.type, Math.round(t.bytes), Math.round(t.bytes / c.total * 100), Math.round(t.count)]);
+    }
+  }
+  if(compRows.length){
+    tab('Page weight', { kind:'table', headers:['Site','Resource type','Bytes a page','Percent of weight','Requests a page'],
+      rows: compRows, widths:[150,160,140,150,150],
+      note:'Mean transferred bytes per page by resource type, from the Lighthouse resource summary.' });
   }
 
   const stackRows = state.sites.filter(st => ok.some(r => r.site === st.origin)).map(st => {
@@ -3949,6 +4535,24 @@ function renderReportHTML(m){
         m.c.sites.forEach(st => pluginNotesFor(st.stack).forEach(n => notes.push([st.label + ' / ' + n.slug, n.text])));
         return notes.length ? '<h3>Plugins that change the recommendation</h3>' + kvTable(notes.slice(0, 10)) : '';
       })());
+  }
+
+  if(m.c.field.some(f => f.hasOrigin || Object.keys(f.page).length)){
+    sec('Real users', 'The measurement Google actually assesses, as distinct from everything else here.',
+      '<p>Chrome User Experience Report data: 28 days of real visits on real devices and connections. Page-level figures exist only for URLs with enough traffic, so origin-level is reported separately and the two are never averaged together. Every other number in this document is lab data from a single synthetic run.</p>' +
+      tableHTML(['Site','Scope','Coverage','LCP','CLS','INP','TTFB','Verdict'],
+        m.c.field.flatMap(f => {
+          const rows = [];
+          const km = ['lcp','cls','inp','ttfb'];
+          if(Object.keys(f.page).length) rows.push([f.site.label, 'Sampled pages',
+            f.pagesWithField + ' of ' + f.pagesMeasured].concat(km.map(k => f.page[k] ? fmt(k, f.page[k].p75) : 'no data')).concat(['']));
+          if(f.hasOrigin) rows.push([f.site.label, 'Whole origin', 'all traffic']
+            .concat(km.map(k => f.origin[k] ? fmt(k, f.origin[k].p75) +
+              (f.origin[k].good != null ? ' (' + Math.round(f.origin[k].good * 100) + '% good)' : '') : 'no data'))
+            .concat([f.originOverall || '']));
+          return rows;
+        })) +
+      '<div class="callout">The percentage is the share of real users inside the good band, which is what the Core Web Vitals assessment is computed from. A p75 that just clears the threshold while only two thirds of users are in the good band still means a third of visitors having a bad time.</div>');
   }
 
   sec('Findings', 'The headline position and the shape of the problem.',

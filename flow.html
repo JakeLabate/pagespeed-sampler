@@ -75,7 +75,7 @@ li{margin-bottom:6px}
 
     <rect x="286" y="520" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
     <text x="436" y="548" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">5 · Interpret</text>
-    <text x="436" y="568" text-anchor="middle" font-size="11.5" fill="#8a8890">aggregate, then 13 rules</text>
+    <text x="436" y="568" text-anchor="middle" font-size="11.5" fill="#8a8890">aggregate, then 17 rules</text>
 
     <rect x="286" y="644" width="300" height="70" rx="8" fill="#0E8C8B" fill-opacity="0.10" stroke="#0E8C8B" stroke-width="2"/>
     <text x="436" y="672" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">6 · Deliver</text>
@@ -208,20 +208,24 @@ li{margin-bottom:6px}
 <div class="phase">
 
 <h3><span class="n">5.1</span>Extract</h3>
-<p>Each response yields far more than seven numbers:</p>
+<p>Each response yields far more than seven numbers. A run whose <code>runtimeError</code> is set is discarded here rather than averaged in, because Lighthouse documents that field as meaning the result may need to be thrown away:</p>
 <table>
 <tr><th>Lab metrics</th><td>Performance score, LCP, CLS, TBT, FCP, TTFB, Speed Index, and accessibility, best practices and SEO when enabled</td></tr>
-<tr><th>Field data</th><td>CrUX LCP, CLS, INP and TTFB where Google holds 28 days of real-user data for the URL</td></tr>
+<tr><th>Field data</th><td>CrUX at both page and origin level, with the p75 and the distribution across good, needs improvement and poor. Page-level exists only for URLs with enough traffic; origin-level exists for almost any site with real traffic, and the two are never averaged together.</td></tr>
 <tr><th>Opportunities</th><td>24 audits that name a cause, each with the specific files responsible and their bytes and milliseconds</td></tr>
 <tr><th>Diagnostics</th><td>The LCP element's selector and snippet, layout-shift elements, third-party entities and their blocking time</td></tr>
 <tr><th>Stack packs</th><td>Lighthouse's own per-platform advice, keyed by audit id</td></tr>
+<tr><th>SEO and quality</th><td>12 SEO checks and 9 best-practice checks, when those categories are enabled. SEO is on by default and costs nothing extra per call.</td></tr>
+<tr><th>Composition</th><td>Transferred bytes and request counts by resource type, plus request totals, round-trip time and server latency</td></tr>
+<tr><th>Validity</th><td><code>runtimeError</code>, <code>runWarnings</code> and <code>captchaResult</code></td></tr>
+<tr><th>Provenance</th><td>Requested URL against final document URL, form factor, throttling method, run duration</td></tr>
 </table>
 
 <h3><span class="n">5.2</span>Aggregate across the sample</h3>
 <p>Findings are rolled up so that one slow asset on forty pages is one finding, not forty. Figures are reported <b>per page</b> throughout: Lighthouse savings summed across a sample produce numbers like "90 seconds wasted", which is not time anyone can save. A resource's size is its own weight, not that weight multiplied by the page count. The across-sample totals survive only as the ranking signal.</p>
 
 <h3><span class="n">5.3</span>Apply the rules</h3>
-<p>13 rules decide what counts as a finding, which is a different job from listing every audit that returned data. Each declares a condition, a severity, a fix risk, an effort level, an evidence set and a fix. Two of them combine signals a spreadsheet row cannot: a collection performing well below the site mean, and a competitor beating the subject.</p>
+<p>17 rules decide what counts as a finding, which is a different job from listing every audit that returned data. Each declares a condition, a severity, a fix risk, an effort level, an evidence set and a fix. Two of them combine signals a spreadsheet row cannot: a collection performing well below the site mean, and a competitor beating the subject.</p>
 <p>Rules fire in declaration order and sort by severity. Nothing is written by a language model. Every sentence is a template filled from the same numbers its evidence table shows.</p>
 
 <h3><span class="n">5.4</span>Route the fix to the platform</h3>
@@ -246,7 +250,7 @@ li{margin-bottom:6px}
 <h2>What this does not do</h2>
 <div class="phase">
 <ul>
-<li><b>Lab data leads.</b> Google ranks on field data. CrUX is reported where available but the report is built on synthetic runs, which vary between executions. Treat a difference under about five performance points as noise.</li>
+<li><b>Lab data still leads the findings.</b> Field data is now reported at both page and origin level and the rules rank it above the lab numbers, but the diagnosis underneath is still synthetic and varies between runs. Treat a lab difference under about five performance points as noise.</li>
 <li><b>The sample ignores traffic.</b> An even spread weights a dead 2019 post the same as the page carrying revenue. Search Console impressions would fix the weighting.</li>
 <li><b>No history.</b> Every run is independent. There is no before-and-after and no trend.</li>
 <li><b>Fingerprinting reads the homepage only.</b> A platform whose signature appears only on interior templates comes back unidentified, and headless setups often will. It degrades to the generic fix rather than guessing.</li>

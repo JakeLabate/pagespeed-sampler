@@ -106,6 +106,44 @@ stat tiles cannot tell them apart.
 | Excel | The same SVGs rasterised to PNG through canvas and embedded on a Charts tab, with the legend drawn inside the SVG since an HTML legend does not survive rasterisation |
 | Google Sheets | Native `addChart` columns anchored to a Chart data tab. **Sheets has no radar chart type**, so the profile is grouped columns there; the radar form appears in the app and the PDF |
 
+## What comes out of one API call
+
+PSI returns far more than a score. The app reads:
+
+| Field | Used for |
+|---|---|
+| `lighthouseResult.categories` | Performance, and SEO, accessibility and best practices when enabled |
+| `lighthouseResult.audits` | 24 opportunity audits, 12 SEO checks, 9 quality checks, resource summary, diagnostics, LCP element, layout-shift elements, third parties |
+| `lighthouseResult.stackPacks` | Platform-specific remediation |
+| `lighthouseResult.runtimeError` | **Discards the run.** Documented as "serious enough that this result may need to be discarded", so it fails the call rather than averaging a bad number in |
+| `lighthouseResult.runWarnings` | Surfaced as run validity, not discarded |
+| `lighthouseResult.requestedUrl` vs `mainDocumentUrl` | Sitemap URLs that redirect, detected at no extra cost |
+| `lighthouseResult.configSettings`, `timing` | Provenance on the method tab |
+| `loadingExperience` | Page-level CrUX, where the URL has enough traffic |
+| `originLoadingExperience` | **Origin-level CrUX**, which exists for almost any site with real traffic |
+| `metrics[].distributions` | Share of real users in the good band, which is what the assessment uses |
+| `captchaResult` | Warns when Google treated the run as automated |
+
+### Field data
+
+Page-level CrUX is missing for most URLs, because most pages do not have enough
+traffic to produce a sample. In a typical run only a handful of sampled pages have it.
+Origin-level almost always exists. Reporting "no field data" while the origin block sits
+unread in the same response was throwing away the only measurement here that correlates
+with ranking.
+
+Both are shown, labelled by scope, and never averaged together. The share of users in
+the good band is reported alongside the p75, because a p75 that just clears the
+threshold while two thirds of users are inside it still means a third having a bad time.
+
+### SEO checks
+
+The SEO category is on by default and costs nothing extra per call. Across a hundred
+sampled pages it returns crawlability, canonical, hreflang, titles, meta descriptions,
+link text, structured data and image alt text: a technical crawl the run already paid
+for. Crawlability failures are ranked critical, above every performance finding, because
+a page that cannot be indexed does not benefit from being fast.
+
 ## Platform-aware fixes
 
 A finding says *what* is wrong. What a client can act on is *where the switch is on their
