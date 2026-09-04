@@ -190,6 +190,18 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .cmpgroup > summary::-webkit-details-marker{display:none}
 .cmpgroup > summary:before{content:"▸ ";color:var(--muted)}
 .cmpgroup[open] > summary:before{content:"▾ "}
+.chartgrid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-bottom:14px}
+.chartcard{background:var(--surface);border:1px solid var(--ring);border-radius:12px;padding:14px 16px 12px}
+.chartcard.wide{margin-bottom:6px}
+.chartcard .ctitle{font-size:12px;font-weight:640;color:var(--ink-2);margin-bottom:6px}
+.chartcard svg{display:block;max-width:100%;height:auto}
+.chartcard.radar svg{max-width:360px;margin:0 auto}
+.chartcard.wide svg{max-width:700px;margin:0 auto}
+.clegend .lg.ring i{background:none;border:1.5px dashed;border-radius:2px;width:11px;height:0;border-bottom-width:0}
+.clegend .lg.ring i{height:9px;border-width:1.5px;border-style:dashed}
+.clegend{display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;justify-content:center}
+.clegend .lg{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-2)}
+.clegend .lg i{width:9px;height:9px;border-radius:3px;display:inline-block}
 .sel-list{max-height:420px;overflow:auto;border:1px solid var(--grid);border-radius:11px}
 .sel-group{border-bottom:1px solid var(--grid)}
 .sel-group:last-child{border-bottom:0}
@@ -1637,6 +1649,7 @@ function renderResults(){
     }
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
+    box.appendChild(chartsSection(okRows));
     box.appendChild(opportunitySection(okRows));
     box.appendChild(collectionTable(okRows));
     box.appendChild(urlTable(okRows));
@@ -1876,6 +1889,100 @@ function tilesFor(rows, strategy){
   return wrap;
 }
 
+/* Charts in the results view. Every chart ships beside a table of the same
+   numbers, which is also what discharges the light-mode contrast warning on the
+   aqua series. */
+function chartsSection(rows){
+  const wrap = el('div');
+  const th = activeTheme();
+  const sites = multi() ? state.sites.filter(s => rows.some(r => r.site === s.origin)) : [];
+  const series = radarSeriesFor(rows, sites);
+  if(!series.length) return wrap;
+
+  const h = el('h3','', 'Profile');
+  h.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h);
+  const p = el('p','hint','Each axis is that metric scored against Google\'s own thresholds, not against the other sites in this run, so a site\'s shape stays the same whoever else is measured alongside it. 90 is the good boundary, 50 the needs-work boundary. Further out is better on every axis.');
+  p.setAttribute('style','margin:0 0 14px');
+  wrap.appendChild(p);
+
+  const grid = el('div','chartgrid');
+  if(series.length <= 3){
+    const { svg, legend } = svgRadar(series, { theme: th, size: 340 });
+    grid.appendChild(chartCard(series.length > 1 ? 'Normalised profile' : series[0].label, svg, legend, 'radar'));
+  } else {
+    /* Four sites cannot share one radar: a fourth hue fails the all-pairs colour
+       gates, and four overlapping polygons are unreadable regardless. Small
+       multiples instead, each against the same threshold rings. */
+    series.forEach((s, i) => {
+      const { svg } = svgRadar([s], { theme: th, size: 250 });
+      grid.appendChild(chartCard(s.label + (s.primary ? ' (yours)' : ''), svg, '', 'radar'));
+    });
+  }
+  wrap.appendChild(grid);
+
+  // the table that carries the same numbers
+  const tw = el('div','tablewrap');
+  tw.innerHTML = '<table><thead><tr><th>Axis</th>' +
+    series.map(s => '<th class="n">' + esc(s.label) + '</th>').join('') + '</tr></thead><tbody>' +
+    RADAR_AXES.map(k => '<tr><td>' + esc(METRICS[k].label) + '</td>' +
+      series.map(s => '<td class="n">' + (s.values[k] == null ? '–' : Math.round(s.values[k])) + '</td>').join('') +
+      '</tr>').join('') + '</tbody></table>';
+  wrap.appendChild(tw);
+  const note = el('p','hint','Scored 0 to 100 against the thresholds, where 100 means at or better than good. Raw measurements are in the tables below.');
+  note.setAttribute('style','margin:8px 0 0');
+  wrap.appendChild(note);
+
+  // distribution: what the mean is hiding
+  const h2 = el('h3','', 'Spread');
+  h2.setAttribute('style','margin:26px 0 4px');
+  wrap.appendChild(h2);
+  const p2 = el('p','hint','Every measured page as a dot, with the mean marked. A mean of 72 can be every page at 72, or half the site at 45 and half at 99. Those are different problems and the averages above cannot tell them apart.');
+  p2.setAttribute('style','margin:0 0 12px');
+  wrap.appendChild(p2);
+  const groups = (multi() ? sites.map(s => ({ label: s.label, values: rows.filter(r => r.site === s.origin).map(r => r.data.perf).filter(v => v != null) }))
+                          : [{ label: 'All pages', values: rows.map(r => r.data.perf).filter(v => v != null) }])
+                 .filter(g => g.values.length);
+  if(groups.length){
+    const card = el('div','chartcard wide');
+    card.innerHTML = svgDistribution(groups, { theme: th, width: 660 });
+    wrap.appendChild(card);
+  }
+
+  // ranked collections
+  const byCol = new Map();
+  rows.forEach(r => {
+    const k = (multi() ? r.siteLabel + ' › ' : '') + r.collection;
+    if(!byCol.has(k)) byCol.set(k, []);
+    byCol.get(k).push(r);
+  });
+  const colRows = Array.from(byCol).map(([label, rs]) => ({
+    label, value: mean(rs.map(r => r.data.perf)) || 0, n: rs.length
+  })).sort((a, b) => a.value - b.value).slice(0, 14);
+  if(colRows.length > 1){
+    const h3 = el('h3','', 'Weakest collections');
+    h3.setAttribute('style','margin:26px 0 4px');
+    wrap.appendChild(h3);
+    const p3 = el('p','hint','Mean performance score by collection, worst first. A template scoring far below the rest is a narrower fix than a site-wide programme.');
+    p3.setAttribute('style','margin:0 0 12px');
+    wrap.appendChild(p3);
+    const card = el('div','chartcard wide');
+    card.innerHTML = svgBars(colRows.map(r => ({
+      label: r.label + ' (' + r.n + ')', value: r.value, display: String(Math.round(r.value)),
+      color: grade('perf', r.value) === 'good' ? th.good : grade('perf', r.value) === 'ni' ? th.warn : th.bad
+    })), { theme: th, width: 660, max: 100, labelW: 230 });
+    wrap.appendChild(card);
+  }
+  return wrap;
+}
+
+function chartCard(title, svg, legend, cls){
+  const c = el('div','chartcard' + (cls ? ' ' + cls : ''));
+  c.innerHTML = '<div class="ctitle">' + esc(title) + '</div>' + svg +
+                (legend ? '<div class="clegend">' + legend + '</div>' : '');
+  return c;
+}
+
 /* Opportunities: what to actually fix, rolled up across the sample. */
 function opportunitySection(rows){
   const wrap = el('div');
@@ -2069,6 +2176,237 @@ function failurePanel(failRows, rows, active){
   b.addEventListener('click', () => retryFailures(active));
   d.appendChild(b);
   return d;
+}
+
+/* ------------------------------------------------------------------ charts */
+/* Pure SVG string builders. No DOM, no library, so the same code renders into
+   the app, into the print document, and onto a canvas for the Excel export. */
+
+/* Three hues, validated all-pairs in both themes (CVD dE 9.2 light / 9.4 dark,
+   normal-vision 24.0 / 20.9). Aqua sits under 3:1 on the light surface, so every
+   polygon is direct-labelled and a table of the same numbers always ships with
+   the chart. A fourth site is never given a fourth hue: the radar becomes small
+   multiples instead. */
+const SERIES_LIGHT = ['#2a78d6', '#eb6834', '#1baf7a'];
+const SERIES_DARK  = ['#3987e5', '#d95926', '#199e70'];
+const THEME_LIGHT = { surface:'#fcfcfb', ink:'#0b0b0b', ink2:'#52514e', muted:'#898781',
+                      grid:'#e1e0d9', axis:'#c3c2b7', series: SERIES_LIGHT,
+                      good:'#0ca30c', warn:'#fab219', bad:'#d03b3b' };
+const THEME_DARK  = { surface:'#1a1a19', ink:'#ffffff', ink2:'#c3c2b7', muted:'#898781',
+                      grid:'#2c2c2a', axis:'#383835', series: SERIES_DARK,
+                      good:'#0ca30c', warn:'#fab219', bad:'#d03b3b' };
+function activeTheme(){
+  const t = document.documentElement.getAttribute('data-theme');
+  const dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches);
+  return dark ? THEME_DARK : THEME_LIGHT;
+}
+
+/* Normalisation is anchored to Google's thresholds, never to the range of the
+   sites in the run. Min-max scaling would mean adding a competitor silently
+   redraws everyone else's shape, so a site's profile would not belong to the
+   site. Here 90 is the good boundary and 50 the needs-work boundary, matching
+   the bands the rest of the report uses. */
+function normaliseMetric(key, v){
+  if(v == null || !isFinite(v)) return null;
+  const m = METRICS[key];
+  if(m.higher) return Math.max(0, Math.min(100, v));
+  const good = m.good, ni = m.ni;
+  if(v <= good) return 100 - 10 * (v / good);
+  if(v <= ni)   return 90 - 40 * ((v - good) / (ni - good));
+  return Math.max(0, 50 * (1 - (v - ni) / (2 * ni)));
+}
+const RADAR_AXES = ['perf','lcp','cls','tbt','fcp','ttfb','si'];
+
+const xesc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nn = n => Math.round(n * 100) / 100;
+
+/* ---- radar / star ------------------------------------------------------- */
+function svgRadar(series, opts){
+  const o = Object.assign({ size: 340, theme: THEME_LIGHT, title: '', showRings: true }, opts || {});
+  const th = o.theme, S = o.size, cx = S / 2, cy = S / 2 + 6, R = S * 0.32;
+  const axes = RADAR_AXES;
+  const n = axes.length;
+  const pt = (i, r) => {
+    const a = (Math.PI * 2 * i / n) - Math.PI / 2;
+    return [nn(cx + Math.cos(a) * R * (r / 100)), nn(cy + Math.sin(a) * R * (r / 100))];
+  };
+  let g = '';
+
+  // rings at the two threshold values that actually mean something
+  if(o.showRings){
+    for(const [val, col] of [[100, th.grid], [90, th.good], [50, th.warn]]){
+      const ring = axes.map((_, i) => pt(i, val).join(',')).join(' ');
+      g += '<polygon points="' + ring + '" fill="none" stroke="' + col + '" stroke-width="1"' +
+           (val === 100 ? '' : ' stroke-dasharray="3 3"') + ' opacity="' + (val === 100 ? 1 : .8) + '"/>';
+    }
+  }
+  // spokes
+  axes.forEach((_, i) => {
+    const [x, y] = pt(i, 100);
+    g += '<line x1="' + cx + '" y1="' + cy + '" x2="' + x + '" y2="' + y + '" stroke="' + th.grid + '" stroke-width="1"/>';
+  });
+  // axis labels
+  axes.forEach((k, i) => {
+    const [x, y] = pt(i, 122);
+    const anchor = Math.abs(x - cx) < 6 ? 'middle' : (x > cx ? 'start' : 'end');
+    g += '<text x="' + nn(x) + '" y="' + nn(y + 3) + '" text-anchor="' + anchor + '" fill="' + th.ink2 +
+         '" font-size="9" font-weight="600">' + xesc(METRICS[k].label) + '</text>';
+  });
+  // polygons, painted back to front so the first series stays readable on top
+  series.slice(0, 3).forEach((s, si) => {
+    const col = th.series[si];
+    const pts = axes.map((k, i) => pt(i, s.values[k] == null ? 0 : s.values[k]));
+    const d = pts.map(p => p.join(',')).join(' ');
+    g += '<polygon points="' + d + '" fill="' + col + '" fill-opacity="0.10" stroke="' + col +
+         '" stroke-width="2" stroke-linejoin="round"/>';
+    pts.forEach(p => {
+      g += '<circle cx="' + p[0] + '" cy="' + p[1] + '" r="4" fill="' + col +
+           '" stroke="' + th.surface + '" stroke-width="2"/>';
+    });
+  });
+  if(o.inlineLegend && series.length){
+    const items = series.slice(0, 3);
+    const perItem = Math.min(120, (S - 24) / items.length);
+    const totalW = perItem * items.length;
+    let lx = (S - totalW) / 2;
+    const ly = S + 6;
+    items.forEach((sv, si) => {
+      g += '<rect x="' + nn(lx) + '" y="' + (ly - 7) + '" width="9" height="9" rx="2" fill="' + th.series[si] + '"/>';
+      g += '<text x="' + nn(lx + 13) + '" y="' + (ly + 1) + '" fill="' + th.ink2 + '" font-size="9">' +
+           xesc(sv.label) + '</text>';
+      lx += perItem;
+    });
+  }
+  const legend = series.slice(0, 3).map((s, si) =>
+    '<span class="lg"><i style="background:' + th.series[si] + '"></i>' + xesc(s.label) + '</span>').join('') +
+    '<span class="lg ring"><i style="border-color:' + th.good + '"></i>good (90)</span>' +
+    '<span class="lg ring"><i style="border-color:' + th.warn + '"></i>needs work (50)</span>';
+  const vbH = S + (o.inlineLegend ? 26 : 14);
+  return { svg: '<svg viewBox="0 0 ' + S + ' ' + vbH + '" width="100%" role="img" aria-label="' +
+    xesc((o.title || 'Normalised performance profile') + '. ' + series.map(s => s.label).join(', ')) + '">' +
+    g + '</svg>', legend };
+}
+
+/* ---- ranked horizontal bars --------------------------------------------- */
+function svgBars(rows, opts){
+  const o = Object.assign({ width: 620, rowH: 26, theme: THEME_LIGHT, max: null,
+                            labelW: 200, colorBy: null, unit: '' }, opts || {});
+  const th = o.theme;
+  const max = o.max != null ? o.max : Math.max(1, ...rows.map(r => r.value || 0));
+  const H = rows.length * o.rowH + 10;
+  const barW = o.width - o.labelW - 74;
+  let g = '';
+  rows.forEach((r, i) => {
+    const y = i * o.rowH + 6;
+    const w = Math.max(2, (r.value || 0) / max * barW);
+    const col = r.color || (o.colorBy ? o.colorBy(r) : th.series[0]);
+    g += '<text x="0" y="' + (y + 13) + '" fill="' + th.ink2 + '" font-size="11">' + xesc(r.label) + '</text>';
+    g += '<rect x="' + o.labelW + '" y="' + (y + 4) + '" width="' + nn(barW) + '" height="12" rx="4" fill="' + th.grid + '"/>';
+    g += '<rect x="' + o.labelW + '" y="' + (y + 4) + '" width="' + nn(w) + '" height="12" rx="4" fill="' + col + '"/>';
+    g += '<text x="' + (o.labelW + barW + 8) + '" y="' + (y + 14) + '" fill="' + th.ink +
+         '" font-size="11" font-weight="600" font-family="ui-monospace,monospace">' + xesc(r.display || String(Math.round(r.value)) + o.unit) + '</text>';
+  });
+  return '<svg viewBox="0 0 ' + o.width + ' ' + H + '" width="100%" role="img" aria-label="' +
+    xesc(o.title || 'Ranked comparison') + '">' + g + '</svg>';
+}
+
+/* ---- per-page score distribution ---------------------------------------- */
+/* A mean of 72 can be every page at 72, or half at 45 and half at 99. Those are
+   different problems and the tiles cannot tell them apart. */
+function svgDistribution(groups, opts){
+  const o = Object.assign({ width: 620, theme: THEME_LIGHT, labelW: 130 }, opts || {});
+  const th = o.theme;
+  const rowH = 40, H = groups.length * rowH + 26;
+  const plotW = o.width - o.labelW - 20;
+  const x = v => o.labelW + (Math.max(0, Math.min(100, v)) / 100) * plotW;
+  let g = '';
+  // banded background for the three score bands
+  [[0, 50, th.bad], [50, 90, th.warn], [90, 100, th.good]].forEach(([a, b, c]) => {
+    g += '<rect x="' + nn(x(a)) + '" y="0" width="' + nn(x(b) - x(a)) + '" height="' + (H - 20) +
+         '" fill="' + c + '" opacity="0.055"/>';
+  });
+  [0, 50, 90, 100].forEach(v => {
+    g += '<line x1="' + nn(x(v)) + '" y1="0" x2="' + nn(x(v)) + '" y2="' + (H - 20) + '" stroke="' + th.grid + '" stroke-width="1"/>';
+    g += '<text x="' + nn(x(v)) + '" y="' + (H - 7) + '" text-anchor="middle" fill="' + th.muted +
+         '" font-size="9" font-family="ui-monospace,monospace">' + v + '</text>';
+  });
+  groups.forEach((grp, gi) => {
+    const y = gi * rowH + 20;
+    const col = th.series[gi % 3];
+    g += '<text x="0" y="' + (y + 4) + '" fill="' + th.ink2 + '" font-size="11" font-weight="600">' + xesc(grp.label) + '</text>';
+    grp.values.forEach(v => {
+      g += '<circle cx="' + nn(x(v)) + '" cy="' + y + '" r="4" fill="' + col + '" fill-opacity="0.55" stroke="' +
+           th.surface + '" stroke-width="1"/>';
+    });
+    const mu = mean(grp.values);
+    if(mu != null){
+      g += '<line x1="' + nn(x(mu)) + '" y1="' + (y - 11) + '" x2="' + nn(x(mu)) + '" y2="' + (y + 11) +
+           '" stroke="' + th.ink + '" stroke-width="2"/>';
+      g += '<text x="' + nn(x(mu)) + '" y="' + (y - 15) + '" text-anchor="middle" fill="' + th.ink +
+           '" font-size="10" font-weight="700" font-family="ui-monospace,monospace">' + Math.round(mu) + '</text>';
+    }
+  });
+  return '<svg viewBox="0 0 ' + o.width + ' ' + H + '" width="100%" role="img" aria-label="' +
+    xesc('Distribution of per-page performance scores') + '">' + g + '</svg>';
+}
+
+
+/* A percentage-width SVG has no intrinsic size, so Image() cannot rasterise it.
+   Stamp explicit pixel dimensions from the viewBox before handing it to canvas. */
+function sizedSvg(svg, w, h){
+  return svg.replace('<svg ', '<svg xmlns="http://www.w3.org/2000/svg" ')
+            .replace('width="100%"', 'width="' + w + '" height="' + h + '"');
+}
+async function svgToPngBase64(svg, w, h, scale){
+  const sc = scale || 2;
+  const src = sizedSvg(svg, w, h);
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([src], { type:'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      try{
+        const c = document.createElement('canvas');
+        c.width = Math.round(w * sc); c.height = Math.round(h * sc);
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/png').split(',')[1]);
+      }catch(e){ URL.revokeObjectURL(url); reject(e); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not rasterise the chart')); };
+    img.src = url;
+  });
+}
+
+/* The chart set, built once and reused by every export. */
+function chartSet(rows, sites){
+  const series = radarSeriesFor(rows, sites && sites.length > 1 ? sites : []);
+  const groups = (sites && sites.length > 1
+    ? sites.map(st => ({ label: st.label, values: rows.filter(r => r.site === st.origin).map(r => r.data.perf).filter(v => v != null) }))
+    : [{ label: 'All pages', values: rows.map(r => r.data.perf).filter(v => v != null) }]).filter(g => g.values.length);
+  const byCol = new Map();
+  rows.forEach(r => {
+    const k = (sites && sites.length > 1 ? r.siteLabel + ' / ' : '') + r.collection;
+    if(!byCol.has(k)) byCol.set(k, []);
+    byCol.get(k).push(r);
+  });
+  const cols = Array.from(byCol).map(([label, rs]) => ({ label, value: mean(rs.map(r => r.data.perf)) || 0, n: rs.length }))
+                    .sort((a, b) => a.value - b.value).slice(0, 14);
+  return { series, groups, cols };
+}
+
+/* ---- data shaping ------------------------------------------------------- */
+function radarSeriesFor(rows, sites){
+  const list = (sites && sites.length ? sites : [{ origin: null, label: 'All pages', primary: true }]);
+  return list.map(s => {
+    const rs = s.origin ? rows.filter(r => r.site === s.origin) : rows;
+    const values = {};
+    RADAR_AXES.forEach(k => { values[k] = normaliseMetric(k, mean(rs.map(r => r.data[k]))); });
+    return { label: s.label, primary: !!s.primary, values, n: rs.length };
+  }).filter(s => s.n > 0);
 }
 
 /* --------------------------------------------------------------- rules engine */
@@ -2533,6 +2871,20 @@ function buildReportModel(){
       note:'The element Lighthouse timed as the largest contentful paint, grouped by selector. One element carrying LCP across many pages is one fix with wide reach.' });
   }
 
+  /* Sheets draws its own charts, and they need a range to point at. This tab is
+     that range. Sheets has no radar chart type at all, so the profile is drawn
+     there as grouped columns, which is the form the numbers would take anyway. */
+  const csEarly = chartSet(ok.filter(r => r.strategy === strategies[0]), state.sites);
+  const chartSites = csEarly.series.map(x => x.label);
+  if(chartSites.length){
+    tab('Chart data', { kind:'table', chartSource: true,
+      headers:['Axis'].concat(chartSites),
+      rows: RADAR_AXES.map(k => [METRICS[k].label].concat(csEarly.series.map(x =>
+        x.values[k] == null ? null : r0(x.values[k])))),
+      widths:[150].concat(chartSites.map(() => 120)),
+      note:'Each metric scored 0 to 100 against Google\'s thresholds, where 100 is at or better than good. This is the source range for the charts on this tab. Google Sheets has no radar chart type, so the profile is drawn as grouped columns; the radar form appears in the app and in the PDF report.' });
+  }
+
   const metricHeaders = SHEET_COLS.map(c => c.label);
   const metricKeys = SHEET_COLS.map(c => c.key);
 
@@ -2646,7 +2998,37 @@ function buildReportModel(){
     rows: rubric, widths:[130,430,150,170,150], noBand:true,
     note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100. On the Opportunities tab, wasted time and bytes are Lighthouse\'s own estimates of what removing the problem would save, summed across every measured page.' });
 
-  return { title: reportTitle(), client, strategies, tabs };
+  const primaryRows = ok.filter(r => r.strategy === strategies[0]);
+  const cs = chartSet(primaryRows, state.sites);
+  const charts = [];
+  if(cs.series.length){
+    if(cs.series.length <= 3){
+      charts.push({ key:'radar', title:'Normalised profile, ' + strategies[0],
+        note:'Each axis scores that metric against Google\'s thresholds, not against the other sites measured, so a profile does not change when a competitor is added. Further from the centre is better. Outer dashed ring is the good boundary, inner is needs work.',
+        svg: svgRadar(cs.series, { theme: THEME_LIGHT, size: 330, inlineLegend: true }).svg, w: 330, h: 356,
+        data: cs.series });
+    } else {
+      cs.series.forEach(x => charts.push({ key:'radar', title:'Profile: ' + x.label,
+        note:'Shown separately because four polygons on one radar cannot be told apart reliably.',
+        svg: svgRadar([x], { theme: THEME_LIGHT, size: 250, inlineLegend: true }).svg, w: 250, h: 276, data: [x] }));
+    }
+  }
+  if(cs.groups.length){
+    charts.push({ key:'spread', title:'Spread of per-page scores, ' + strategies[0],
+      note:'Every measured page as a dot with the mean marked. A mean can hide a wide spread, and a wide spread is a different problem from a uniformly mediocre one.',
+      svg: svgDistribution(cs.groups, { theme: THEME_LIGHT, width: 620 }),
+      w: 620, h: cs.groups.length * 40 + 26, data: cs.groups });
+  }
+  if(cs.cols.length > 1){
+    charts.push({ key:'collections', title:'Weakest collections, ' + strategies[0],
+      note:'Mean performance score by collection, worst first.',
+      svg: svgBars(cs.cols.map(x => ({ label: x.label + ' (' + x.n + ')', value: x.value,
+        display: String(r0(x.value)),
+        color: grade('perf', x.value) === 'good' ? THEME_LIGHT.good : grade('perf', x.value) === 'ni' ? THEME_LIGHT.warn : THEME_LIGHT.bad })),
+        { theme: THEME_LIGHT, width: 620, max: 100, labelW: 230 }),
+      w: 620, h: cs.cols.length * 26 + 10, data: cs.cols });
+  }
+  return { title: reportTitle(), client, strategies, tabs, charts, chartData: cs };
 }
 
 const GLOSSARY = {
@@ -2843,6 +3225,7 @@ async function buildXlsx(model){
     if(!t.noBand) ws.autoFilter = { from: { row: headRow, column: 1 }, to: { row: Math.max(headRow, lastDataRow), column: t.headers.length } };
   }
 
+  await addChartSheet(wb, model);
   const buf = await wb.xlsx.writeBuffer();
   return new Blob([buf], { type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 }
@@ -2945,6 +3328,15 @@ const REPORT_CSS = [
 '.callout{background:var(--cream);border-left:3px solid var(--amber);padding:13px 16px;border-radius:3px;',
 'margin:16px 0 0;font-size:10.5pt}',
 '.muted{color:var(--muted);font-size:10pt}',
+'.charts{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;margin:14px 0}',
+'figure.chart{margin:0;flex:0 0 auto;width:78mm;break-inside:avoid;page-break-inside:avoid}',
+'figure.chart.small{width:52mm}figure.chart.wide{width:100%;margin:10px 0 16px}',
+'figure.chart svg{display:block;width:100%;height:auto}',
+'figure.chart figcaption{font-family:"IBM Plex Mono",monospace;font-size:8pt;letter-spacing:.09em;',
+'text-transform:uppercase;color:var(--muted);text-align:center;margin-bottom:4px}',
+'.chartkey{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:6px;font-size:9pt;color:var(--body)}',
+'.chartkey span{display:inline-flex;align-items:center;gap:5px}',
+'.chartkey i{width:9px;height:9px;border-radius:2px;display:inline-block}',
 '@page{size:A4;margin:0}',
 '@media print{body{background:#fff}',
 '.cover,.page{margin:0;box-shadow:none;break-before:page;page-break-before:always;min-height:0;height:auto}',
@@ -3062,6 +3454,38 @@ function renderReportHTML(m){
         const v = mean(m.c.rows.map(x => x.data[col.key]));
         return [col.label, fmt(col.key, v), GRADE_LABEL[grade(col.key, v)]];
       })));
+
+  sec('Profile', 'The shape of the result, and what the averages conceal.',
+    (function(){
+      const series = radarSeriesFor(m.c.rows, m.c.sites.length > 1 ? m.c.sites : []);
+      const groups = (m.c.sites.length > 1
+        ? m.c.sites.map(st => ({ label: st.label, values: m.c.rows.filter(r => r.site === st.origin).map(r => r.data.perf).filter(v => v != null) }))
+        : [{ label: 'All pages', values: m.c.rows.map(r => r.data.perf).filter(v => v != null) }]).filter(g => g.values.length);
+      let out = '';
+      if(series.length){
+        const many = series.length > 3;
+        out += '<p>Each axis scores that metric against Google\'s published thresholds rather than against the other sites measured, so a profile belongs to the site and does not change when a competitor is added or removed. Further from the centre is better on every axis. The outer dashed ring is the good boundary, the inner one the needs-work boundary.</p>';
+        out += '<div class="charts">' + (many
+          ? series.map(x => '<figure class="chart small"><figcaption>' + esc(x.label) + '</figcaption>' +
+              svgRadar([x], { theme: THEME_LIGHT, size: 230 }).svg + '</figure>').join('')
+          : '<figure class="chart"><figcaption>Normalised profile</figcaption>' +
+              svgRadar(series, { theme: THEME_LIGHT, size: 330 }).svg +
+              '<div class="chartkey">' + series.slice(0,3).map((x, i) =>
+                '<span><i style="background:' + SERIES_LIGHT[i] + '"></i>' + esc(x.label) + '</span>').join('') +
+              '</div></figure>') + '</div>';
+        if(many) out += '<p class="muted">Shown as separate panels rather than one overlay: four polygons on one radar cannot be told apart reliably, and a fourth colour fails the separation checks the other three pass.</p>';
+        out += tableHTML(['Axis'].concat(series.map(x => x.label)),
+          RADAR_AXES.map(k => [METRICS[k].label].concat(series.map(x =>
+            x.values[k] == null ? 'no data' : String(r0(x.values[k]))))));
+      }
+      if(groups.length){
+        out += '<h3>Spread</h3><p>Every measured page as a dot, with the mean marked. A mean of ' +
+          r0(m.c.perf) + ' can be every page at ' + r0(m.c.perf) +
+          ', or half the pages far below it and half far above. Those are different problems, and a single average cannot tell them apart.</p>' +
+          '<figure class="chart wide">' + svgDistribution(groups, { theme: THEME_LIGHT, width: 620 }) + '</figure>';
+      }
+      return out;
+    })());
 
   sec('What is working', 'Stated so the recommendations are not read as a verdict on everything.',
     (m.working.length
@@ -3240,6 +3664,56 @@ $('#dlJson').addEventListener('click', () => {
   }, null, 2), 'application/json');
 });
 $('#resStrategy').addEventListener('change', renderResults);
+
+
+/* ExcelJS cannot author native charts, so the same SVGs the app draws are
+   rasterised and embedded. They are pictures, deliberately: a picture that
+   matches the app exactly beats a native chart that does not. */
+async function addChartSheet(wb, model){
+  if(!model.charts) return;
+  const cs = model.charts;
+  const ws = wb.addWorksheet('Charts', {
+    properties: { tabColor: { argb: argb(BRAND.accent) } },
+    views: [{ showGridLines: false }],
+    pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: 'portrait' }
+  });
+  ws.mergeCells(1, 1, 1, 8);
+  const t = ws.getCell(1, 1);
+  t.value = model.title;
+  t.style = styleFillFont(BRAND.ink, 'FFFFFF', { name: BRAND.headFont, size: 14, bold: true });
+  ws.getRow(1).height = 30;
+  ws.mergeCells(2, 1, 2, 8);
+  const sub = ws.getCell(2, 1);
+  sub.value = 'Charts';
+  sub.style = styleFillFont(BRAND.ink2, 'FFFFFF', { name: BRAND.monoFont, size: 9, bold: true });
+
+  let row = 4;
+  for(const c of cs){
+    ws.mergeCells(row, 1, row, 8);
+    const cap = ws.getCell(row, 1);
+    cap.value = c.title;
+    cap.style = styleFillFont(BRAND.soft, BRAND.ink, { name: BRAND.headFont, size: 11, bold: true });
+    row++;
+    ws.mergeCells(row, 1, row, 8);
+    const note = ws.getCell(row, 1);
+    note.value = c.note;
+    note.font = { name: BRAND.bodyFont, size: 9, italic: true, color: { argb: argb('6B6A66') } };
+    note.alignment = { wrapText: true, vertical: 'top' };
+    ws.getRow(row).height = 26;
+    row += 2;
+    try{
+      const b64 = await svgToPngBase64(c.svg, c.w, c.h, 2);
+      const id = wb.addImage({ base64: b64, extension: 'png' });
+      ws.addImage(id, { tl: { col: 0.2, row: row - 1 }, ext: { width: c.w, height: c.h } });
+      row += Math.ceil(c.h / 19) + 2;
+    }catch(e){
+      ws.getCell(row, 1).value = 'Chart could not be rendered: ' + e.message;
+      row += 2;
+    }
+  }
+  ws.getColumn(1).width = 14;
+  for(let i = 2; i <= 8; i++) ws.getColumn(i).width = 13;
+}
 
 /* --- Google Sheets writer ------------------------------------------------ */
 /* Three calls: create the tabs, push values as plain arrays (far smaller than
@@ -3472,6 +3946,32 @@ async function createGoogleSheet(model, token){
     for(let ci = (t.widths || []).length; ci < t.headers.length; ci++){
       reqs.push({ updateDimensionProperties: { range: { sheetId, dimension:'COLUMNS', startIndex:ci, endIndex:ci+1 }, properties:{ pixelSize: 104 }, fields:'pixelSize' } });
     }
+  });
+
+  // native charts, anchored on the chart-data tab
+  model.tabs.forEach((t, sheetId) => {
+    if(!t.chartSource || !t.rows.length) return;
+    const nSeries = t.headers.length - 1;
+    const first = headerRowIndex(t) - 1;          // header row index
+    const last = headerRowIndex(t) + t.rows.length;
+    const src = (c0, c1) => ({ sources: [{ sheetId, startRowIndex: first, endRowIndex: last,
+                                           startColumnIndex: c0, endColumnIndex: c1 }] });
+    reqs.push({ addChart: { chart: {
+      spec: {
+        title: 'Normalised profile, 0 to 100 against Google thresholds',
+        subtitle: 'Higher is better on every axis. 90 is the good boundary, 50 needs work.',
+        basicChart: {
+          chartType: 'COLUMN', legendPosition: 'BOTTOM_LEGEND', headerCount: 1,
+          axis: [{ position:'BOTTOM_AXIS', title:'Metric' },
+                 { position:'LEFT_AXIS', title:'Score' }],
+          domains: [{ domain: { sourceRange: src(0, 1) } }],
+          series: Array.from({ length: nSeries }, (_, i) =>
+            ({ series: { sourceRange: src(i + 1, i + 2) }, targetAxis: 'LEFT_AXIS' }))
+        }
+      },
+      position: { overlayPosition: { anchorCell: { sheetId, rowIndex: last + 2, columnIndex: 0 },
+                                     widthPixels: 720, heightPixels: 400 } }
+    } } });
   });
 
   // batchUpdate has a request ceiling; send in chunks

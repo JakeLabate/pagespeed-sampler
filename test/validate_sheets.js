@@ -12,7 +12,11 @@ const OK = {
   numberFormat: ['TEXT','NUMBER','PERCENT','CURRENCY','DATE','TIME','DATE_TIME','SCIENTIFIC'],
   mergeType: ['MERGE_ALL','MERGE_COLUMNS','MERGE_ROWS'],
   request: ['repeatCell','updateSheetProperties','updateDimensionProperties','addConditionalFormatRule',
-            'mergeCells','addBanding','setBasicFilter','updateCells','updateBorders']
+            'mergeCells','addBanding','setBasicFilter','updateCells','updateBorders','addChart'],
+  chartType: ['BAR','LINE','AREA','COLUMN','SCATTER','COMBO','STEPPED_AREA'],
+  legendPosition: ['BOTTOM_LEGEND','LEFT_LEGEND','RIGHT_LEGEND','TOP_LEGEND','NO_LEGEND','LABELED_LEGEND'],
+  axisPosition: ['BOTTOM_AXIS','LEFT_AXIS','RIGHT_AXIS'],
+  targetAxis: ['LEFT_AXIS','RIGHT_AXIS']
 };
 const errs = [];
 function walk(node, path){
@@ -27,6 +31,10 @@ function walk(node, path){
     if(k === 'wrapStrategy' && !OK.wrap.includes(v)) errs.push(p+' = '+v);
     if(k === 'numberFormat' && v && v.type && !OK.numberFormat.includes(v.type)) errs.push(p+'.type = '+v.type);
     if(k === 'mergeType' && !OK.mergeType.includes(v)) errs.push(p+' = '+v);
+    if(k === 'chartType' && !OK.chartType.includes(v)) errs.push(p+' = '+v);
+    if(k === 'legendPosition' && !OK.legendPosition.includes(v)) errs.push(p+' = '+v);
+    if(k === 'position' && typeof v === 'string' && !OK.axisPosition.includes(v)) errs.push(p+' = '+v);
+    if(k === 'targetAxis' && !OK.targetAxis.includes(v)) errs.push(p+' = '+v);
     if(k === 'fields' && typeof v !== 'string') errs.push(p+' must be a string');
     if((k === 'red'||k==='green'||k==='blue') && (typeof v !== 'number' || v < 0 || v > 1)) errs.push(p+' = '+v+' (must be 0..1)');
     walk(v, p);

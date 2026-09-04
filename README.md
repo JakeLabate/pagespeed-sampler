@@ -60,6 +60,41 @@ one on a single page.
 The LCP element parser walks the audit details tree rather than indexing a fixed path,
 because the node moved between Lighthouse versions and will move again.
 
+## Charts
+
+The same three charts appear in the app, the document, the Excel workbook and the Google
+Sheet. They are drawn once as SVG string builders with no library, so the app, the print
+document and the rasteriser all render identical output.
+
+**Radar (star) profile.** Seven metrics per site on one polygon. The scoring is anchored
+to Google's thresholds, never to the range of sites in the run: min-max scaling would
+mean adding a competitor silently redraws everyone else's shape, so a profile would
+belong to the comparison set rather than to the site. 100 is at or better than good, 90
+is the good boundary, 50 is needs-work. Further from the centre is better on every axis.
+
+A radar is a weak form for reading exact values, which is why a table of the same
+numbers ships beside it every time. It is a strong form for reading *shape*, which is
+what a competitive comparison actually needs, and that is the job it is doing here.
+
+Capped at three overlaid polygons. Four sites render as small multiples instead, because
+a fourth categorical hue fails the all-pairs colour separation checks the first three
+pass, and four overlapping polygons are unreadable regardless.
+
+**Spread.** Every measured page as a dot with the mean marked. A mean of 72 can be every
+page at 72 or half the site at 45 and half at 99; those are different problems and the
+stat tiles cannot tell them apart.
+
+**Weakest collections.** Mean score by collection, worst first, coloured by band.
+
+### Per surface
+
+| Surface | How |
+|---|---|
+| App | Inline SVG, theme-aware, with the table beside it |
+| Report document | Inline SVG, sized in millimetres, prints without a rasteriser |
+| Excel | The same SVGs rasterised to PNG through canvas and embedded on a Charts tab, with the legend drawn inside the SVG since an HTML legend does not survive rasterisation |
+| Google Sheets | Native `addChart` columns anchored to a Chart data tab. **Sheets has no radar chart type**, so the profile is grouped columns there; the radar form appears in the app and the PDF |
+
 ## The deterministic report
 
 The workbook is the data. The **Report** button produces the document you hand a
