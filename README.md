@@ -266,9 +266,9 @@ condition, a severity, a fix risk, an effort level, an evidence set and a fix, a
 prose is a template filled from the same numbers its evidence table shows, so the
 narrative and the data cannot disagree.
 
-**Determinism, precisely.** The *rendering* is reproducible: the same measurements and
-the same report date always produce a byte-identical document, and the app prints its
-SHA-256 so a client copy can be proved unaltered. The *measurements* are not
+**Determinism, precisely.** The *rendering* is reproducible: the same measurements
+produce an identical document, the only varying input being the report date, which is
+read from the clock in your own time zone. The *measurements* are not
 reproducible, because Lighthouse returns different numbers for identical requests.
 Re-running an audit produces different figures and may produce a different set of
 findings. The document says so on its method page rather than leaving the distinction to
@@ -362,12 +362,14 @@ number formats, frozen headers, banding and conditional formatting come across.
 uses Google Identity Services with the `drive.file` scope, so the app can only ever see
 files it created itself, never the rest of your Drive. Setup, once:
 
-1. In the same Google Cloud project as your PageSpeed key, enable the **Google Sheets
-   API**.
+The client ID is set in `CONFIG` in the source rather than typed into a field, since it
+is a property of the deployment and not of a run. A client ID is a public identifier, not
+a secret. To point a fork at your own Google Cloud project:
+
+1. In the same project as your PageSpeed key, enable the **Google Sheets API**.
 2. Create an OAuth 2.0 Client ID of type **Web application**.
-3. Add the origin the app is served from to its **Authorised JavaScript origins**. The
-   app prints the exact string to paste, under the client ID field.
-4. Paste the client ID into the app. It is kept in `localStorage` in your browser.
+3. Add the origin you serve the app from to its **Authorised JavaScript origins**.
+4. Set `CONFIG.googleClientId` in `index.html`.
 
 ### Tabs
 
@@ -499,13 +501,16 @@ and preferring direct whenever it works. See **Speed** above for hedging and rot
 ### Your own proxy
 
 The one discovery failure that cannot be engineered around is a WAF blocking the public
-proxies by address. Set **Your own CORS proxy** under Sampling and run options to a
-template like `https://your-worker.workers.dev/?url={url}` and it is tried straight after
-direct fetch, ahead of the public pool, works with public proxies switched off, and sends
-the audited URLs to your server rather than a stranger's. A Cloudflare Worker takes about
-a minute to stand up; the code is on the
-[How it works page](https://pagespeed.jakelabate.com/flow.html#your-own-proxy). Lock its
-allow-origin to your own page rather than `*`, or you have deployed an open proxy.
+proxies by address. This build ships its own Cloudflare Worker, set as
+`CONFIG.proxyTemplate` in the source. It is tried straight after direct fetch, ahead of
+the public pool, works with public proxies switched off, and sends the audited URLs to a
+server this deployment runs rather than a stranger's.
+
+Forking: the Worker code is on the
+[How it works page](https://pagespeed.jakelabate.com/flow.html#your-own-proxy) and takes
+about a minute to stand up. Point `CONFIG.proxyTemplate` at it, using `{url}` where the
+encoded target goes or `{raw}` for an unencoded one. Lock its allow-origin to your own
+page rather than `*`, or you have deployed an open proxy.
 
 Two things a browser-only tool cannot get around without one:
 
@@ -528,6 +533,22 @@ Proxies can be disabled entirely with the "Allow public CORS proxies" checkbox.
 
 It is one HTML file with no build step and no dependencies. Open `index.html` directly,
 or serve the folder with anything.
+
+## Configuration
+
+Five settings are fixed in `CONFIG` at the top of the script rather than exposed as
+fields, because each was a property of the deployment that the operator had already
+decided and then had to keep re-deciding:
+
+| Setting | Value |
+|---|---|
+| `googleClientId` | The OAuth client for the Sheets export |
+| `proxyTemplate` | The Worker used ahead of the public proxy pool |
+| `strategies` | Always `mobile` and `desktop` |
+| `categories` | Always SEO, accessibility and best practices, alongside performance |
+
+The report date is no longer a field either: it is read from the clock in the viewer's
+own time zone, not UTC, so a late-evening run does not carry tomorrow's date.
 
 ## Limits
 

@@ -161,7 +161,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 
 <h3><span class="n">1.1c</span>Your own proxy</h3>
 <p>The public proxies share datacentre address ranges, and a site behind a WAF blocks those ranges wholesale. The proxy connects, the site answers 403, and no amount of retrying changes it. This is the one discovery failure a browser-only tool cannot engineer around, because the block is on the address, not on the request.</p>
-<p>A proxy on an address you control is the way out, and it is also better for privacy: the audited URLs go to your server rather than to a stranger&rsquo;s. Paste its template into <b>Your own CORS proxy</b> under &ldquo;Sampling and run options&rdquo;, using <code>{url}</code> where the encoded target goes. It is tried straight after direct fetch, ahead of the public pool, and it works even with public proxies switched off.</p>
+<p>A proxy on a known address is the way out, and it is also better for privacy: the audited URLs go to a server this deployment runs rather than to a stranger&rsquo;s. This build ships one, a Cloudflare Worker, configured in the source rather than typed into a field. It is tried straight after direct fetch, ahead of the public pool, and it works even with public proxies switched off. Fork the app and the Worker below is what you deploy in its place.</p>
 <p id="your-own-proxy">A Cloudflare Worker is the quickest one to stand up. Create a Worker, paste this, deploy, and use <code>https://&lt;your-worker&gt;.workers.dev/?url={url}</code>:</p>
 <div class="scroller"><pre><code>export default {
   async fetch(request) {
@@ -293,7 +293,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 <tr><th>Google Sheet</th><td>Created live in your Drive under the <code>drive.file</code> scope, with native charts.</td></tr>
 <tr><th>Report</th><td>Print-ready document: method, stack, findings, recommendations with severity and fix risk, roadmap, rubric, and an appendix listing every rule that was evaluated including those that stayed silent.</td></tr>
 </table></div>
-<div class="note"><b>The report is byte-deterministic.</b> The only input that varies between two runs on the same measurements is the report date, which is a field rather than a clock read. The app prints the document's SHA-256 so a client copy can be proved identical.</div>
+<div class="note"><b>Every figure in the report is determined by the measurements.</b> No finding is written by hand or by a language model, and two runs on the same measurements on the same day produce an identical document. The report date is read from the clock in your own time zone, so the same measurements regenerated on a later day carry that day&rsquo;s date.</div>
 </div>
 
 <h2 id="what-this-does-not-do">What this does not do<a class="anchor" href="#what-this-does-not-do" aria-label="Link to this section">#</a></h2>

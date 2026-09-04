@@ -356,53 +356,15 @@ footer .by{margin-left:auto}
           <div class="hint">Median by default: one catastrophic page should not decide which collection gets named the weakest. The other is always shown beside it.</div>
         </div>
         <div>
-          <label class="f">Strategy</label>
-          <div style="display:flex;gap:16px;padding-top:5px">
-            <label class="chk"><input type="checkbox" id="stMobile" checked> Mobile</label>
-            <label class="chk"><input type="checkbox" id="stDesktop" checked> Desktop</label>
-          </div>
-          <div class="hint">Both means two API calls per URL.</div>
-        </div>
-        <div>
-          <label class="f">Extra Lighthouse categories</label>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;padding-top:5px">
-            <label class="chk"><input type="checkbox" id="catSeo" checked> SEO</label>
-            <label class="chk"><input type="checkbox" id="catA11y"> Accessibility</label>
-            <label class="chk"><input type="checkbox" id="catBp"> Best practices</label>
-          </div>
-          <div class="hint">Performance is always measured. SEO costs nothing extra per call and returns crawlability, canonical, hreflang, titles and structured data across every sampled page.</div>
-        </div>
-        <div>
           <label class="f">Sitemap fetch</label>
           <div style="padding-top:5px"><label class="chk"><input type="checkbox" id="useProxy" checked> Allow public CORS proxies</label></div>
           <div class="hint">Direct fetch is tried first; proxies only if the site blocks it.</div>
         </div>
       </div>
-      <div class="row c2" style="margin-top:12px">
-        <div>
-          <label class="f" for="gclient">Google OAuth client ID (for Google Sheets export)</label>
-          <input type="text" id="gclient" value="269152840641-7cdpehnnohdiq5bvojum27ea0f7j9ijm.apps.googleusercontent.com" placeholder="1234567890-abc123.apps.googleusercontent.com" spellcheck="false" autocomplete="off">
-          <div class="hint">Prefilled with this deployment's client. To point the Sheets export at your own Google Cloud project instead, replace it: create a <b>Web application</b> OAuth client, add <span class="mono" id="originHint"></span> to its authorised JavaScript origins, and paste the ID here. A client ID is a public identifier, not a secret. The Excel export needs none of this.</div>
-        </div>
-        <div>
-          <label class="f" for="reportDate">Report date</label>
-          <input type="date" id="reportDate">
-          <div class="hint">Pinned rather than read from the clock, so regenerating a report from the same measurements produces byte-identical output.</div>
-        </div>
-        <div>
-          <label class="f" for="clientName">Client or project name (report cover)</label>
-          <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
-          <div class="hint">Appears on the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
-        </div>
-      </div>
-      <div style="margin-top:14px">
-        <label class="f" for="customProxy">Your own CORS proxy (optional)</label>
-        <input type="text" id="customProxy" placeholder="https://your-worker.workers.dev/?url={url}" spellcheck="false">
-        <div class="hint">Sites behind a WAF block the public proxies&rsquo; datacentre addresses, and no browser-only tool can
-          get around that. Your own proxy is a different address and usually is not blocked. Use <code>{url}</code> where the
-          encoded target goes, or <code>{raw}</code> for an unencoded one. It is tried first, ahead of the public proxies, and
-          the URLs go to your server rather than to a stranger&rsquo;s.
-          <a href="flow.html#your-own-proxy">Worker you can paste, takes a minute</a>.</div>
+      <div style="margin-top:12px">
+        <label class="f" for="clientName">Client or project name (report cover)</label>
+        <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
+        <div class="hint">Appears on the report cover and the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
       </div>
       <div style="margin-top:14px">
         <label class="f" for="manual">Manual URL list (fallback or addition)</label>
@@ -501,13 +463,37 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#gclient','#clientName','#reportDate','#repeats','#customProxy'];
+/* Deployment configuration. These were fields, and every one of them was a
+   decision the operator had already made and then had to keep re-making. They
+   are fixed here instead, which is also the only place to change them. */
+const CONFIG = {
+  /* A client ID is a public identifier, not a secret; it is in the page source
+     of every app that uses Google sign-in. It is scoped to this origin. */
+  googleClientId: '269152840641-7cdpehnnohdiq5bvojum27ea0f7j9ijm.apps.googleusercontent.com',
+  /* Tried ahead of the public pool, because it is on an address WAFs do not
+     block wholesale and because the audited URLs then go to a server we run. */
+  proxyTemplate: 'https://pss-proxy.jake-a-labate.workers.dev/?url={url}',
+  strategies: ['mobile', 'desktop'],
+  categories: ['seo', 'accessibility', 'best-practices']
+};
+/* The report date used to be a pinned field so a regenerated report was
+   byte-identical. It now reads the clock, in the viewer's own zone rather than
+   UTC, which would put a late-evening run on tomorrow's date. Same measurements
+   on a different day therefore produce a differently dated document; everything
+   else about it is still fully determined by the measurements. */
+function todayLocal(){
+  const d = new Date();
+  const p = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
+}
+
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#clientName','#repeats'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
   n.addEventListener('change', () => localStorage.setItem(k, n.value));
 });
-['#stMobile','#stDesktop','#catSeo','#catA11y','#catBp','#useProxy'].forEach(sel => {
+['#useProxy'].forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.checked = v === '1';
   n.addEventListener('change', () => localStorage.setItem(k, n.checked ? '1' : '0'));
@@ -589,10 +575,8 @@ const PROXIES = [
    because it is likelier to work and because sending the audited URLs to their
    own server beats sending them to a stranger's. */
 function customProxy(){
-  const el = document.getElementById('customProxy');
-  const tpl = el ? el.value.trim() : '';
-  if(!tpl || !/^https?:\/\//i.test(tpl)) return null;
-  if(!/\{url\}|\{raw\}/.test(tpl)) return null;
+  const tpl = CONFIG.proxyTemplate;
+  if(!tpl || !/^https?:\/\//i.test(tpl) || !/\{url\}|\{raw\}/.test(tpl)) return null;
   return { name:'yours', custom:true,
     url: u => tpl.replace(/\{url\}/g, encodeURIComponent(u)).replace(/\{raw\}/g, u) };
 }
@@ -1763,7 +1747,7 @@ function renderSelection(){
   const totalSel = state.selected.size;
   const cap = clampInt($('#totalCap').value, 1, 100, 100);
   const addPill = (label, val) => { const p = el('span','pill'); p.innerHTML = esc(label) + ' <b>' + esc(String(val)) + '</b>'; pills.appendChild(p); };
-  const nStrat = (($('#stMobile').checked?1:0) + ($('#stDesktop').checked?1:0)) || 1;
+  const nStrat = CONFIG.strategies.length;
   const allItems = state.sites.reduce((n,s) => n + s.items.length, 0);
   if(multi()) addPill('Sites', state.sites.length);
   const allLocales = uniq(state.sites.flatMap(x => x.locales || []));
@@ -1821,13 +1805,9 @@ function renderSelection(){
     : '';
 }
 
-function selectedCategories(){
-  const c = ['performance'];
-  if($('#catSeo') && $('#catSeo').checked) c.push('seo');
-  if($('#catA11y') && $('#catA11y').checked) c.push('accessibility');
-  if($('#catBp') && $('#catBp').checked) c.push('best-practices');
-  return c;
-}
+/* Performance is implied by the endpoint; the rest are requested explicitly and
+   cost nothing extra per call. */
+function selectedCategories(){ return ['performance'].concat(CONFIG.categories); }
 
 function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
 
@@ -2578,8 +2558,7 @@ async function runTest(){
   const key = $('#key').value.trim();
   const cats = selectedCategories();
   const strategies = [];
-  if($('#stMobile').checked) strategies.push('mobile');
-  if($('#stDesktop').checked) strategies.push('desktop');
+  CONFIG.strategies.forEach(x => strategies.push(x));
   if(!strategies.length) strategies.push('mobile');
   state.strategies = strategies;
 
@@ -5961,14 +5940,7 @@ $('#dlXlsx').addEventListener('click', async () => {
 
 $('#mkSheet').addEventListener('click', async () => {
   if(!state.results.length) return;
-  const clientId = $('#gclient').value.trim();
-  if(!clientId){
-    $('#reportNote').innerHTML = '<div class="err"><b>No Google OAuth client ID set.</b> Add one under “Sampling and run options” in step 1, or use the Excel export, which needs no setup. ' +
-      'Create a Web application OAuth client in the same Google Cloud project as your PageSpeed key and add <span class="mono">' + esc(location.origin) + '</span> to its authorised JavaScript origins.</div>';
-    const det = document.querySelector('details.adv');
-    if(det){ det.open = true; $('#gclient').scrollIntoView({ behavior:'smooth', block:'center' }); setTimeout(() => $('#gclient').focus(), 400); }
-    return;
-  }
+  const clientId = CONFIG.googleClientId;
   const btn = $('#mkSheet'); const was = btn.textContent;
   btn.disabled = true; btn.textContent = 'Working…';
   try{
@@ -5997,7 +5969,7 @@ function buildDeterministicReport(){
     title: reportTitle(),
     client: ($('#clientName').value || '').trim(),
     strategy,
-    date: ($('#reportDate').value || new Date().toISOString().slice(0, 10)),
+    date: todayLocal(),
     perGroup: clampInt($('#perGroup').value, 1, 10, 10),
     totalCap: clampInt($('#totalCap').value, 1, 100, 100)
   };
@@ -6333,10 +6305,9 @@ $('#reSample').addEventListener('click', resampleForMapping);
 $('#selNone').addEventListener('click', () => { state.selected = new Set(); renderSelection(); });
 $('#runBtn').addEventListener('click', () => { runTest().catch(e => { $('#runErr').innerHTML = '<div class="err">' + esc(e.message) + '</div>'; state.running = false; $('#runBtn').disabled = false; $('#stopBtn').disabled = true; }); });
 $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn').disabled = true; $('#runNote').textContent = 'Stopping after in-flight requests…'; });
-['#perGroup','#totalCap','#stMobile','#stDesktop'].forEach(s => $(s).addEventListener('change', () => { if(state.sites.length) renderSelection(); }));
+['#perGroup','#totalCap'].forEach(s => $(s).addEventListener('change', () => { if(state.sites.length) renderSelection(); }));
 
 /* deep link: ?site=a.com&site=b.com */
-(function showOrigin(){ const n = $('#originHint'); if(n) n.textContent = location.origin; })();
 (function centralInit(){
   const n = $('#centralMode');
   if(!n) return;
@@ -6349,7 +6320,6 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
     if(state.results.length) renderResults();
   });
 })();
-(function defaultDate(){ const n = $('#reportDate'); if(n && !n.value) n.value = new Date().toISOString().slice(0, 10); })();
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
   const sites = q.getAll('site').filter(Boolean);
