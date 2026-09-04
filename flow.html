@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · PageSpeed Sampler</title>
+<meta name="description" content="The full pipeline a site goes through: transport negotiation, sitemap discovery, collection pairing, sampling, measurement, interpretation and delivery.">
+<link rel="stylesheet" href="_shared.css">
+<style>
+.wrap{max-width:900px}
+h2{font-size:13px;text-transform:uppercase;letter-spacing:.07em;color:var(--teal);margin:40px 0 4px;font-weight:700}
+h3{font-size:17px;margin:26px 0 8px;letter-spacing:-.01em}
+.phase{border-left:2px solid var(--rule);padding:0 0 4px 20px;margin:0 0 8px}
+.phase h3{margin-top:20px}
+.phase h3 .n{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--teal);
+  margin-right:9px;vertical-align:2px}
+figure{margin:22px 0 8px}
+figure svg{display:block;width:100%;height:auto;max-width:100%}
+figcaption{font-size:12.5px;color:var(--muted);margin-top:10px;text-align:center}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:12px 0 6px}
+th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);
+  padding:7px 10px 7px 0;border-bottom:1px solid var(--rule);font-weight:600}
+td{padding:8px 10px 8px 0;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-2)}
+td:first-child{white-space:nowrap;color:var(--ink);font-weight:600}
+td code,p code,li code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  background:var(--surface);padding:1px 5px;border-radius:4px;border:1px solid var(--ring)}
+.fail{background:var(--surface);border:1px solid var(--ring);border-left:3px solid #d03b3b;
+  border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px}
+.fail b{color:var(--ink)}
+.note{background:var(--surface);border:1px solid var(--ring);border-left:3px solid var(--teal);
+  border-radius:8px;padding:11px 14px;margin:12px 0;font-size:13px}
+ul{padding-left:20px;margin:8px 0 12px}
+li{margin-bottom:6px}
+.lead{font-size:16px;color:var(--ink-2);max-width:68ch;margin-bottom:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<p class="eyebrow">PageSpeed Sampler</p>
+<h1>How it works</h1>
+<p class="lead">Every stage a site passes through, what it falls back to when a stage fails, and the three points where the pipeline loops back on itself.</p>
+<p class="updated">Six phases. Everything runs in the browser; there is no server anywhere in this diagram.</p>
+
+<figure>
+<svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to public proxies to twenty-two common sitemap paths to a manual URL list. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8a8890"/>
+    </marker>
+    <marker id="at" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0E8C8B"/>
+    </marker>
+  </defs>
+
+  <!-- main column -->
+  <g font-family="system-ui, sans-serif">
+    <rect x="286" y="24" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="436" y="52" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">1 · Discover</text>
+    <text x="436" y="72" text-anchor="middle" font-size="11.5" fill="#8a8890">transport, then sitemap, then URLs</text>
+
+    <rect x="286" y="148" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="436" y="176" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">2 · Shape</text>
+    <text x="436" y="196" text-anchor="middle" font-size="11.5" fill="#8a8890">collections, page roles, pairings</text>
+
+    <rect x="286" y="272" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="436" y="300" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">3 · Sample</text>
+    <text x="436" y="320" text-anchor="middle" font-size="11.5" fill="#8a8890">10 per collection, 100 per site</text>
+
+    <rect x="286" y="396" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="436" y="424" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">4 · Measure</text>
+    <text x="436" y="444" text-anchor="middle" font-size="11.5" fill="#8a8890">PageSpeed Insights, concurrent</text>
+
+    <rect x="286" y="520" width="300" height="70" rx="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+    <text x="436" y="548" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">5 · Interpret</text>
+    <text x="436" y="568" text-anchor="middle" font-size="11.5" fill="#8a8890">aggregate, then 13 rules</text>
+
+    <rect x="286" y="644" width="300" height="70" rx="8" fill="#0E8C8B" fill-opacity="0.10" stroke="#0E8C8B" stroke-width="2"/>
+    <text x="436" y="672" text-anchor="middle" font-size="14" font-weight="650" fill="currentColor">6 · Deliver</text>
+    <text x="436" y="692" text-anchor="middle" font-size="11.5" fill="#8a8890">six outputs, one model</text>
+
+    <!-- spine -->
+    <g stroke="currentColor" stroke-width="1.5" marker-end="url(#a)" fill="none">
+      <line x1="436" y1="94" x2="436" y2="144"/>
+      <line x1="436" y1="218" x2="436" y2="268"/>
+      <line x1="436" y1="342" x2="436" y2="392"/>
+      <line x1="436" y1="466" x2="436" y2="516"/>
+      <line x1="436" y1="590" x2="436" y2="640"/>
+    </g>
+
+    <!-- fallbacks, right -->
+    <g stroke="#8a8890" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ad)">
+      <path d="M586,44 H648"/>
+      <path d="M586,59 H648"/>
+      <path d="M586,74 H648"/>
+    </g>
+    <text x="656" y="40" font-size="11" fill="#8a8890">blocked by CORS → 5 public proxies</text>
+    <text x="656" y="63" font-size="11" fill="#8a8890">no robots directive → 22 known paths</text>
+    <text x="656" y="86" font-size="11" fill="#8a8890">nothing found → paste URLs by hand</text>
+
+    <g stroke="#8a8890" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ad)">
+      <path d="M586,431 H648"/>
+    </g>
+    <text x="656" y="422" font-size="11" fill="#8a8890">500 or 429 → back off,</text>
+    <text x="656" y="437" font-size="11" fill="#8a8890">then 3 retry sweeps at 4 wide</text>
+
+    <!-- side input: stack detection -->
+    <rect x="654" y="520" width="242" height="70" rx="8" fill="none" stroke="#0E8C8B" stroke-width="1.5"/>
+    <text x="775" y="547" text-anchor="middle" font-size="12.5" font-weight="650" fill="currentColor">Stack detection</text>
+    <text x="775" y="566" text-anchor="middle" font-size="11" fill="#8a8890">homepage markup +</text>
+    <text x="775" y="580" text-anchor="middle" font-size="11" fill="#8a8890">Lighthouse stack packs</text>
+    <path d="M654,555 H592" stroke="#0E8C8B" stroke-width="1.5" fill="none" marker-end="url(#at)"/>
+    <text x="775" y="508" font-size="11" fill="#0E8C8B" text-anchor="middle">changes the fix, not the measurement</text>
+
+    <!-- feedback loops, left. The pairing edit re-runs sampling; the adaptive
+         ceiling loops inside the measure phase, not back into an earlier one. -->
+    <g stroke="#0E8C8B" stroke-width="1.5" fill="none" marker-end="url(#at)">
+      <path d="M286,183 H186 V307 H282"/>
+      <path d="M286,414 H176 V448 H282"/>
+    </g>
+    <text x="178" y="238" font-size="11" fill="#0E8C8B" text-anchor="end">edit a pairing,</text>
+    <text x="178" y="252" font-size="11" fill="#0E8C8B" text-anchor="end">re-sample</text>
+    <text x="168" y="405" font-size="11" fill="#0E8C8B" text-anchor="end">errors cluster,</text>
+    <text x="168" y="419" font-size="11" fill="#0E8C8B" text-anchor="end">halve the ceiling,</text>
+    <text x="168" y="433" font-size="11" fill="#0E8C8B" text-anchor="end">climb back on success</text>
+
+    <!-- inputs -->
+    <text x="436" y="14" text-anchor="middle" font-size="11" fill="#8a8890">1 to 4 origins</text>
+    <line x1="436" y1="0" x2="436" y2="20" stroke="currentColor" stroke-width="1.5" marker-end="url(#a)" opacity="0"/>
+    <text x="436" y="738" text-anchor="middle" font-size="11" fill="#8a8890">app · CSV · JSON · Excel · Google Sheet · report document</text>
+    <line x1="436" y1="714" x2="436" y2="726" stroke="currentColor" stroke-width="1.5" marker-end="url(#a)"/>
+  </g>
+</svg>
+<figcaption>Solid arrows are the happy path. Dashed grey is what happens when a stage fails. Teal is a loop back into an earlier stage, or a side input that changes what a later stage says.</figcaption>
+</figure>
+
+<h2>Phase 1 · Discover</h2>
+<div class="phase">
+
+<h3><span class="n">1.1</span>Negotiate a transport, once per site</h3>
+<p>A browser cannot read another site's <code>robots.txt</code> unless that site sends CORS headers, and most do not. Rather than pay a fallback chain on every request, the app probes once per site and remembers the winner.</p>
+<p>It tries <code>/robots.txt</code>, then <code>/</code>, through each transport in turn: direct fetch first, then allorigins, codetabs, corsproxy.io, isomorphic-git, thingproxy. The first that returns a body wins and every later request for that site uses it.</p>
+<div class="fail"><b>If every transport fails:</b> the site is reported as unreachable and skipped. Other sites in the run continue. Proxies can be switched off entirely, in which case only sites that permit direct access are reachable.</div>
+
+<h3><span class="n">1.2</span>Find the sitemap</h3>
+<p><code>robots.txt</code> is checked first for a <code>Sitemap:</code> directive, which is authoritative when present. If there is none, 22 common paths are probed <b>in parallel</b>, six at a time:</p>
+<p><code>/sitemap.xml</code> <code>/sitemap_index.xml</code> <code>/sitemap-index.xml</code> <code>/sitemap/sitemap.xml</code> <code>/wp-sitemap.xml</code> <code>/sitemap-0.xml</code> <code>/sitemap1.xml</code> <code>/sitemaps/sitemap.xml</code> <code>/sitemap/index.xml</code> <code>/sitemap.php</code> <code>/sitemap.txt</code> <code>/sitemapindex.xml</code> <code>/page-sitemap.xml</code> <code>/post-sitemap.xml</code> <code>/product-sitemap.xml</code> <code>/sitemap/</code> <code>/sitemap-pages.xml</code> <code>/sitemap_pages.xml</code> <code>/xmlsitemap.xml</code> <code>/sitemap/sitemap-index.xml</code> <code>/api/sitemap.xml</code> <code>/server-sitemap.xml</code></p>
+<p>Where several hit, an index beats a leaf urlset, then the shallowest path wins.</p>
+
+<h3><span class="n">1.3</span>Walk it</h3>
+<p>A <code>&lt;sitemapindex&gt;</code> is walked breadth-first into its children, five at a time, to a depth of five and a default ceiling of 30 child sitemaps. Plain-text sitemaps are parsed too. Gzipped sitemaps are skipped, because a browser cannot decompress them from <code>fetch</code>.</p>
+
+<h3><span class="n">1.4</span>Detect the stack</h3>
+<p>The homepage is fetched on the same transport and fingerprinted: 20 platforms, 8 image CDNs, the <code>generator</code> meta tag, and on WordPress the installed plugin and theme slugs read out of asset paths. This is a side input; it changes what phase 5 says, not what gets measured.</p>
+</div>
+
+<h2>Phase 2 · Shape</h2>
+<div class="phase">
+
+<h3><span class="n">2.1</span>Normalise</h3>
+<p>Every URL is resolved absolute, filtered to the same host ignoring <code>www</code>, stripped of query and fragment, de-trailing-slashed, de-duplicated, and filtered against asset extensions. A 20,000 URL ceiling applies.</p>
+
+<h3><span class="n">2.2</span>Group into collections</h3>
+<p>Collection is the first path segment. <code>/blog/x</code> and <code>/blog/y</code> become <b>blog</b>. Root-level one-off pages such as <code>/about</code> and <code>/contact</code> collapse into a single <b>top-level pages</b> group rather than becoming twenty groups of one. The homepage gets its own group.</p>
+
+<h3><span class="n">2.3</span>Tag page roles</h3>
+<p>17 patterns tag pages by role: home, about, contact, services, pricing, products, blog, faq, team, careers, locations, work, reviews, privacy, terms, resources. Roles are what make like-for-like comparison possible across sites that share no URL structure.</p>
+
+<h3><span class="n">2.4</span>Pair collections across sites</h3>
+<p>Only when more than one site is measured. Two sites rarely name the same thing the same way, so pairings are seeded from exact names plus a 13-cluster synonym table with plural stripping: blog / news / articles / insights, products / shop / store / collections, case-studies / work / portfolio / projects, and so on. A pairing is proposed only when at least two sites match.</p>
+<div class="note"><b>This is a guess, and it is editable.</b> Step 3 in the app shows every pairing with a dropdown per site listing that site's own collections and page counts. Rename one, repoint a site, mark a site not comparable, or add a pairing the synonym table would never have connected. Editing re-samples immediately.</div>
+</div>
+
+<h2>Phase 3 · Sample</h2>
+<div class="phase">
+<p>Measuring every page of a 4,000-page site is neither affordable nor necessary. The sample is built in a fixed order so that the things a comparison depends on can never be squeezed out by the budget:</p>
+<table>
+<tr><th>Order</th><th>What goes in</th><th>Why first</th></tr>
+<tr><td>1</td><td>One page per detected role</td><td>Home against home only works if both were measured</td></tr>
+<tr><td>2</td><td>Every paired collection's sample</td><td>A pairing with data on one side only is not a comparison</td></tr>
+<tr><td>3</td><td>Round-robin across remaining collections</td><td>Stops one 5,000-page collection eating the whole budget</td></tr>
+</table>
+<p>Within a collection the pick is an even, deterministic spread across the sorted list rather than the first N, so a blog sample is not twenty consecutive posts from one week. Caps are 10 per collection and 100 per site, both adjustable. The homepage is always included.</p>
+<div class="note">Every URL stays individually selectable in the app before the run, so the automatic sample is a starting point rather than a decision.</div>
+</div>
+
+<h2>Phase 4 · Measure</h2>
+<div class="phase">
+
+<h3><span class="n">4.1</span>Build the job list</h3>
+<p>One job per selected URL per strategy. 100 URLs across mobile and desktop is 200 jobs.</p>
+
+<h3><span class="n">4.2</span>Run them concurrently, and discover the real ceiling</h3>
+<p>The 240-queries-per-minute quota is not the binding constraint. Each call holds a Lighthouse run on Google's side for 10 to 30 seconds, and one project's share of that pool is far narrower than 240. Firing 200 at once saturates it and the overflow returns <code>500 ERRORED_DOCUMENT_REQUEST</code>, not <code>429</code>.</p>
+<p>So concurrency is discovered rather than declared:</p>
+<ul>
+<li>Opens at <b>40 in flight</b> and climbs 1.4× every 8 consecutive successes toward the chosen batch width.</li>
+<li><b>Halves the ceiling</b> after 3 clustered errors, floor of 5, then climbs again. Additive increase, multiplicative decrease.</li>
+<li>A <code>429</code> pauses the whole batch 7 seconds; a cluster of 5xx pauses it 3.</li>
+<li>A rolling 230-per-minute admission guard sits underneath all of it.</li>
+</ul>
+<div class="fail"><b>On failure:</b> 4 attempts per call, then up to 3 retry sweeps over what still failed, at 4 concurrent. Sweeps skip permanent causes such as <code>NO_FCP</code> or an invalid URL. Anything still failing is grouped by Google's own error text with a manual retry button.</div>
+</div>
+
+<h2>Phase 5 · Interpret</h2>
+<div class="phase">
+
+<h3><span class="n">5.1</span>Extract</h3>
+<p>Each response yields far more than seven numbers:</p>
+<table>
+<tr><th>Lab metrics</th><td>Performance score, LCP, CLS, TBT, FCP, TTFB, Speed Index, and accessibility, best practices and SEO when enabled</td></tr>
+<tr><th>Field data</th><td>CrUX LCP, CLS, INP and TTFB where Google holds 28 days of real-user data for the URL</td></tr>
+<tr><th>Opportunities</th><td>24 audits that name a cause, each with the specific files responsible and their bytes and milliseconds</td></tr>
+<tr><th>Diagnostics</th><td>The LCP element's selector and snippet, layout-shift elements, third-party entities and their blocking time</td></tr>
+<tr><th>Stack packs</th><td>Lighthouse's own per-platform advice, keyed by audit id</td></tr>
+</table>
+
+<h3><span class="n">5.2</span>Aggregate across the sample</h3>
+<p>Findings are rolled up so that one slow asset on forty pages is one finding, not forty. Figures are reported <b>per page</b> throughout: Lighthouse savings summed across a sample produce numbers like "90 seconds wasted", which is not time anyone can save. A resource's size is its own weight, not that weight multiplied by the page count. The across-sample totals survive only as the ranking signal.</p>
+
+<h3><span class="n">5.3</span>Apply the rules</h3>
+<p>13 rules decide what counts as a finding, which is a different job from listing every audit that returned data. Each declares a condition, a severity, a fix risk, an effort level, an evidence set and a fix. Two of them combine signals a spreadsheet row cannot: a collection performing well below the site mean, and a competitor beating the subject.</p>
+<p>Rules fire in declaration order and sort by severity. Nothing is written by a language model. Every sentence is a template filled from the same numbers its evidence table shows.</p>
+
+<h3><span class="n">5.4</span>Route the fix to the platform</h3>
+<p>Per finding, per site, resolution runs in a fixed order: the curated playbook first, then Lighthouse's own stack pack, then nothing. It never invents advice for a platform it has no entry for, and Lighthouse-sourced text is labelled.</p>
+<p>The playbook covers 14 platforms by audit id, and 18 plugin slugs carry their own note. If ShortPixel is already installed, the image finding is a bulk run in a plugin they own rather than a purchase.</p>
+</div>
+
+<h2>Phase 6 · Deliver</h2>
+<div class="phase">
+<p>Six outputs, all built from the same model so none of them can drift from the others:</p>
+<table>
+<tr><th>App</th><td>Comparison, charts, opportunities, stack, and every measured page. Sortable, filterable, live.</td></tr>
+<tr><th>CSV</th><td>Flat rows, one per measurement.</td></tr>
+<tr><th>JSON</th><td>Nested per site, per collection, per role, with the pairings recorded.</td></tr>
+<tr><th>Excel</th><td>14 tabs in the house palette, with the charts rasterised in.</td></tr>
+<tr><th>Google Sheet</th><td>Created live in your Drive under the <code>drive.file</code> scope, with native charts.</td></tr>
+<tr><th>Report</th><td>Print-ready document: method, stack, findings, recommendations with severity and fix risk, roadmap, rubric, and an appendix listing every rule that was evaluated including those that stayed silent.</td></tr>
+</table>
+<div class="note"><b>The report is byte-deterministic.</b> The only input that varies between two runs on the same measurements is the report date, which is a field rather than a clock read. The app prints the document's SHA-256 so a client copy can be proved identical.</div>
+</div>
+
+<h2>What this does not do</h2>
+<div class="phase">
+<ul>
+<li><b>Lab data leads.</b> Google ranks on field data. CrUX is reported where available but the report is built on synthetic runs, which vary between executions. Treat a difference under about five performance points as noise.</li>
+<li><b>The sample ignores traffic.</b> An even spread weights a dead 2019 post the same as the page carrying revenue. Search Console impressions would fix the weighting.</li>
+<li><b>No history.</b> Every run is independent. There is no before-and-after and no trend.</li>
+<li><b>Fingerprinting reads the homepage only.</b> A platform whose signature appears only on interior templates comes back unidentified, and headless setups often will. It degrades to the generic fix rather than guessing.</li>
+<li><b>Gzipped sitemaps are skipped.</b> Browsers cannot decompress them from <code>fetch</code>.</li>
+</ul>
+</div>
+
+<footer>
+<a href="./">PageSpeed Sampler</a>
+<a href="privacy.html">Privacy</a>
+<a href="terms.html">Terms</a>
+<a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
+</footer>
+</div>
+</body>
+</html>

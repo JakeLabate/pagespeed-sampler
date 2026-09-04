@@ -6,6 +6,7 @@ Insights API, and reports the averages. Add up to four sites and it benchmarks t
 against each other.
 
 **Live: https://jakelabate.github.io/pagespeed-sampler/**
+**Full pipeline: https://jakelabate.github.io/pagespeed-sampler/flow.html**
 
 ## What it does
 
