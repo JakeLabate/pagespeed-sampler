@@ -453,9 +453,20 @@ thingproxy) only when direct access is blocked. It probes once per site to pick 
 transport instead of paying the fallback chain on every request, racing all six at once
 and preferring direct whenever it works. See **Speed** above for hedging and rotation.
 
-If every transport fails, paste a URL list into the manual field under
-**Sampling and run options** and press **Use manual list only**. Grouping, sampling and
-measurement all work the same way on a pasted list.
+Two things a browser-only tool cannot get around:
+
+- A site behind a WAF (Cloudflare and friends) often blocks the proxies' datacentre
+  addresses. The proxy connects, the site returns 403, and no amount of retrying changes
+  that. The run reports what each transport came back with rather than claiming the site
+  published no sitemap, because those are different problems.
+- A site with no `robots.txt` at all is fine. The transport probe tries `/` as well, so a
+  404 on `robots.txt` no longer reads as "unreachable", and the 22 known sitemap paths are
+  still tried.
+
+In either case, paste that site's URLs into the manual field under **Sampling and run
+options** and run again. The list applies **per site**: each site keeps only the pasted
+URLs on its own host, so one blocked competitor does not cost you the comparison.
+Grouping, sampling and measurement all work the same way on a pasted list.
 
 Proxies can be disabled entirely with the "Allow public CORS proxies" checkbox.
 

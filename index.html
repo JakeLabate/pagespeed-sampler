@@ -398,7 +398,7 @@ footer .by{margin-left:auto}
       <div style="margin-top:14px">
         <label class="f" for="manual">Manual URL list (fallback or addition)</label>
         <textarea id="manual" placeholder="https://example.com/&#10;https://example.com/about&#10;https://example.com/contact" spellcheck="false"></textarea>
-        <div class="hint">One URL per line. Used on its own if discovery fails, or merged in if discovery works.</div>
+        <div class="hint">One URL per line. Used on its own if discovery fails, or merged in if discovery works. Applies per site: paste URLs for several sites and each takes only its own.</div>
       </div>
     </div>
   </details>
@@ -737,7 +737,14 @@ async function fetchText(url, opts){
 async function probeTransport(origin, allowProxy, log, ctx){
   const cands = PROXIES.filter(p => p.name === 'direct' || allowProxy)
     .slice().sort((a,b) => healthScore(a.name) - healthScore(b.name));
-  const target = origin + '/robots.txt';
+  if(!cands.length){ ctx.tp = null; return null; }
+
+  /* Two targets, not one. robots.txt is the file discovery wants, but a site is
+     perfectly allowed not to have one, and probing only that meant a 404 on
+     robots.txt was read as "this site is unreachable" and the 22 known sitemap
+     paths were never tried at all. */
+  const targets = [origin + '/robots.txt', origin + '/'];
+
   /* Direct must win whenever it works: it is faster than any proxy and it is
      the only transport that does not hand every audited URL to a third party.
      A CORS-blocked direct fetch fails almost immediately, so a head start costs
@@ -746,58 +753,74 @@ async function probeTransport(origin, allowProxy, log, ctx){
   const direct = cands[0] && cands[0].name === 'direct' ? cands[0] : null;
   const others = cands.filter(p => p !== direct);
   const HEAD_START = 1200, GRACE = 800;
+  const notes = {};                 // what each transport actually came back with
+
+  /* An HTTP status coming back at all means the request crossed: the transport
+     works even though this particular file did not. That is a usable transport
+     for the sitemap path probe, so it is kept as a fallback rather than thrown
+     away, and only a network error, a CORS block or a timeout is a real miss. */
+  const attempt = (p, target, onResult) => {
+    const t0 = Date.now();
+    rawFetch(p.url(target), 12000).then(r => {
+      const ms = Date.now() - t0;
+      const body = !!(r.ok && r.text != null);
+      recordProxy(p.name, ms, body);
+      if(!notes[p.name] || body) notes[p.name] = r.ok ? 'ok' : (r.why || 'failed');
+      onResult(body ? { p, robots: target.endsWith('/robots.txt') ? r.text : null, solid:true }
+             : (r.status ? { p, robots: null, solid:false } : null));
+    });
+  };
 
   const winner = await new Promise(resolve => {
-    let settled = false, done = 0, directDone = false, provisional = null;
+    let settled = false, done = 0, directDone = false;
+    let provisional = null, reachable = null;
+    const total = cands.length * targets.length;
     const timers = [];
     const finish = v => { if(settled) return; settled = true; timers.forEach(clearTimeout); resolve(v); };
-    const attempt = (p, onResult) => {
-      const t0 = Date.now();
-      rawFetch(p.url(target), 12000).then(r => {
-        done++;
-        const good = !!(r.ok && r.text != null);
-        recordProxy(p.name, Date.now() - t0, good);
-        onResult(good ? { p, robots: r.text } : null);
-      });
+    const settleLow = () => finish(provisional || reachable || null);
+
+    const handle = (isDirect) => hit => {
+      done++;
+      if(hit && hit.solid){
+        if(isDirect) return finish(hit);
+        if(!direct || directDone) return finish(hit);
+        if(!provisional){ provisional = hit; timers.push(setTimeout(() => finish(provisional), GRACE)); }
+        return;
+      }
+      if(hit && !reachable) reachable = hit;     // transport crossed, file did not
+      if(isDirect){
+        directDone = true;
+        if(provisional) return finish(provisional);
+      }
+      if(done >= total) settleLow();
     };
-    if(direct) attempt(direct, hit => {
-      directDone = true;
-      if(hit) finish(hit);
-      else if(provisional) finish(provisional);
-      else if(done >= cands.length) finish(null);
-    });
+
+    if(direct) targets.forEach(t => attempt(direct, t, handle(true)));
     others.forEach((p, i) => {
-      const go = () => {
-        if(settled) return;
-        attempt(p, hit => {
-          if(hit){
-            if(!direct || directDone) finish(hit);
-            else if(!provisional){
-              provisional = hit;
-              timers.push(setTimeout(() => finish(provisional), GRACE));
-            }
-          } else if(done >= cands.length) finish(provisional);
-        });
-      };
+      const go = () => { if(settled) return; targets.forEach(t => attempt(p, t, handle(false))); };
       timers.push(setTimeout(go, (direct ? HEAD_START : 0) + i * 350));
     });
-    if(!cands.length) finish(null);
   });
+
+  ctx.notes = notes;
   if(!winner){
     ctx.tp = null;
     logLine(log, 'No transport could reach ' + origin + (allowProxy ? '' : ' (proxies are disabled)'), 'bad');
+    cands.forEach(p => logLine(log, '  ' + p.name.padEnd(11) + ' ' + (notes[p.name] || 'no response'), 'dim'));
     saveHealth();
     return null;
   }
   ctx.tp = winner.p;
   ctx.robots = winner.robots;
+  ctx.solid = !!winner.solid;
   ctx.rotation = [winner.p];
   ctx.alts = PROXIES.filter(p => p.name !== 'direct' && p !== winner.p && allowProxy)
     .sort((a,b) => healthScore(a.name) - healthScore(b.name)).slice(0, 3);
   logLine(log, 'Transport: ' + (winner.p.name === 'direct'
     ? 'direct browser fetch (site sends CORS headers)'
     : 'public proxy "' + winner.p.name + '"' +
-      (ctx.alts.length ? ', hedging to ' + ctx.alts.map(a => a.name).join(' and ') : '')), 'ok');
+      (ctx.alts.length ? ', hedging to ' + ctx.alts.map(a => a.name).join(' and ') : '')) +
+    (winner.solid ? '' : ' (reached the site but could not read robots.txt or the homepage body)'), 'ok');
   saveHealth();
   return winner.p;
 }
@@ -5923,9 +5946,11 @@ async function discoverAll(origins, sweepThrough){
     if(!rec) continue;
     const { origin, res, ctx, stack } = rec;
 
-    /* A manual list only makes sense for a single-site run; with several sites it
-       would be ambiguous which site the pasted URLs belong to. */
-    const manual = origins.length === 1 ? manualItems(origin) : [];
+    /* The manual list used to be refused on multi-site runs as ambiguous, which
+       meant one competitor behind a WAF killed the comparison with no way back.
+       It is not ambiguous: normalise() keeps only same-host URLs, so each site
+       takes the pasted lines that belong to it and ignores the rest. */
+    const manual = manualItems(origin);
     const merged = res.urls.concat(manual.map(m => Object.assign({}, m, { source: 'manual' })));
     const items = normalise(merged, origin);
 
@@ -5935,7 +5960,13 @@ async function discoverAll(origins, sweepThrough){
          reader looking in the wrong place. */
       let why;
       if(res && res.noTransport){
-        why = 'could not be reached from the browser: it blocks cross-origin requests and no proxy could fetch it either';
+        const n = (ctx && ctx.notes) || {};
+        const detail = Object.keys(n).map(k => k + ' ' + n[k]).join(', ');
+        why = 'could not be reached from the browser. Direct fetch is blocked because the site sends no CORS headers, ' +
+              'and every public proxy failed too' + (detail ? ' (' + esc(detail) + ')' : '') +
+              '. Sites behind a WAF commonly block the proxies\u2019 datacentre addresses, which no browser-only tool can work around. ' +
+              'Paste its URLs into the manual list under \u201cSampling and run options\u201d and run again: the list now applies per site, ' +
+              'so the other sites in this comparison are unaffected';
       } else if(res && res.rootsFound && (res.childFailures || []).length){
         why = 'published a sitemap, but none of its ' + res.childFailures.length +
               ' child sitemaps could be fetched within the ' + Math.round((opts.budgetMs || 90000) / 1000) +
@@ -5943,6 +5974,17 @@ async function discoverAll(origins, sweepThrough){
               'Raise the discovery budget, turn off proxies if the site allows direct access, or paste URLs into the manual list';
       } else if(res && res.rootsFound){
         why = 'published a sitemap, but no URLs could be read from it. It may be empty, gzipped, or in a format this cannot parse';
+      } else if(ctx && ctx.tp && ctx.solid === false){
+        /* The transport reached the site and the site refused every file. That
+           is a blocked reader, not a missing sitemap, and saying the latter
+           sends the reader off to check a sitemap that is probably fine. */
+        const n = (ctx.notes || {});
+        const detail = Object.keys(n).map(k => k + ' ' + n[k]).join(', ');
+        why = 'refused every request that reached it' + (detail ? ' (' + esc(detail) + ')' : '') +
+              '. The proxies connected but the site returned an error rather than a file, which is what a WAF does to ' +
+              'datacentre addresses. Its sitemap is probably fine and simply not readable this way. ' +
+              'Paste its URLs into the manual list under \u201cSampling and run options\u201d and run again: the list applies per site, ' +
+              'so the other sites in this comparison are unaffected';
       } else {
         why = 'published no sitemap at robots.txt or any of the 22 common paths';
       }
