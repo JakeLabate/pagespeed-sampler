@@ -1424,10 +1424,17 @@ function normalise(list, origin){
     if(u.host.replace(/^www\./,'') !== originHost) continue;
     if(/\.(jpg|jpeg|png|gif|webp|avif|svg|pdf|zip|mp4|mp3|xml|json|css|js|ico|woff2?)$/i.test(u.pathname)) continue;
     u.hash = ''; u.search = '';
-    let href = u.toString();
-    if(href.length > 1 && href.endsWith('/') && u.pathname !== '/') href = href.slice(0, -1);
-    if(seen.has(href)) continue;
-    seen.add(href);
+    const href = u.toString();
+    /* Measure the URL the site actually published. Stripping the trailing slash
+       to deduplicate meant every URL from a slash-terminated sitemap was then
+       requested in a form the site 301s away from: an extra round trip on every
+       page, TTFB and LCP inflated by it across the whole run, and a redirect
+       report blaming the site for redirects this tool had introduced. The
+       stripped form is still the deduplication key, it is just not the URL. */
+    const key = href.length > 1 && href.endsWith('/') && u.pathname !== '/'
+      ? href.slice(0, -1) : href;
+    if(seen.has(key)) continue;
+    seen.add(key);
     out.push({
       url: href, path: u.pathname, lastmod: item.lastmod || null, source: item.source || null,
       key: keyPageType(href), site: origin, siteLabel: hostLabel(origin), collection: null

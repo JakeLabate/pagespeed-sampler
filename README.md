@@ -488,6 +488,12 @@ or serve the folder with anything.
 
 ## Limits
 
+
+URLs are measured exactly as the sitemap publishes them, trailing slash included. The
+slash-stripped form is used only as a de-duplication key. This matters more than it sounds:
+on a site whose sitemap ends in slashes and whose server canonicalises to them, stripping the
+slash makes every measured URL a redirect, inflating TTFB and LCP across the entire run and
+producing a redirect report that blames the site for redirects the tool caused.
 - Gzipped sitemaps (`.xml.gz`) are skipped; browsers cannot decompress them from `fetch`.
 - 20,000 discovered URLs and 30 child sitemaps by default (both configurable).
 - PageSpeed Insights takes roughly 10 to 30 seconds per URL server-side. Because the

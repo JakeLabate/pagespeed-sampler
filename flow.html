@@ -207,7 +207,8 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 <div class="phase">
 
 <h3><span class="n">2.1</span>Normalise</h3>
-<p>Every URL is resolved absolute, filtered to the same host ignoring <code>www</code>, stripped of query and fragment, de-trailing-slashed, de-duplicated, and filtered against asset extensions. A 20,000 URL ceiling applies.</p>
+<p>Every URL is resolved absolute, filtered to the same host ignoring <code>www</code>, stripped of query and fragment, de-duplicated, and filtered against asset extensions. A 20,000 URL ceiling applies.</p>
+<p><b>The URL measured is the URL the sitemap published, trailing slash and all.</b> The slash-stripped form is the de-duplication key and nothing more. Stripping it from the URL itself meant that on any site whose sitemap ends in slashes, and whose server canonicalises to them, every single page was requested in a form the server 301s away from: an extra round trip on every measurement, TTFB and LCP inflated by it across the whole run, and a redirect report blaming the site for redirects this tool had introduced.</p>
 
 <h3><span class="n">2.2</span>Group into collections</h3>
 <p>Collection is the first path segment. <code>/blog/x</code> and <code>/blog/y</code> become <b>blog</b>. Root-level one-off pages such as <code>/about</code> and <code>/contact</code> collapse into a single <b>top-level pages</b> group rather than becoming twenty groups of one. The homepage gets its own group.</p>
