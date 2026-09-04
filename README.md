@@ -453,7 +453,18 @@ thingproxy) only when direct access is blocked. It probes once per site to pick 
 transport instead of paying the fallback chain on every request, racing all six at once
 and preferring direct whenever it works. See **Speed** above for hedging and rotation.
 
-Two things a browser-only tool cannot get around:
+### Your own proxy
+
+The one discovery failure that cannot be engineered around is a WAF blocking the public
+proxies by address. Set **Your own CORS proxy** under Sampling and run options to a
+template like `https://your-worker.workers.dev/?url={url}` and it is tried straight after
+direct fetch, ahead of the public pool, works with public proxies switched off, and sends
+the audited URLs to your server rather than a stranger's. A Cloudflare Worker takes about
+a minute to stand up; the code is on the
+[How it works page](https://pagespeed.jakelabate.com/flow.html#your-own-proxy). Lock its
+allow-origin to your own page rather than `*`, or you have deployed an open proxy.
+
+Two things a browser-only tool cannot get around without one:
 
 - A site behind a WAF (Cloudflare and friends) often blocks the proxies' datacentre
   addresses. The proxy connects, the site returns 403, and no amount of retrying changes

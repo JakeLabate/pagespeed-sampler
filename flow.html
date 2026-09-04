@@ -18,6 +18,9 @@ figure{margin:30px 0 10px;background:var(--surface);border:1px solid var(--ring)
 figure svg{display:block;width:100%;height:auto;max-width:100%}
 figcaption{font-size:12.5px;color:var(--muted);margin-top:14px;text-align:center}
 .phase table{font-size:13px}
+pre{background:var(--surface);border:1px solid var(--ring);border-radius:10px;
+  padding:14px 16px;overflow-x:auto;font-size:12.5px;line-height:1.55;margin:14px 0}
+pre code{background:none;border:0;padding:0;font-size:inherit}
 .phase td:first-child{white-space:nowrap}
 </style>
 </head>
@@ -155,6 +158,35 @@ figcaption{font-size:12.5px;color:var(--muted);margin-top:14px;text-align:center
 <p>Sequential fallback means the slowest proxy sets the wall clock: you wait a full timeout to learn nothing, then start over somewhere else. Instead a second transport is started while the first is still outstanding and whichever answers first wins, so a stalled proxy costs the hedge delay rather than the timeout.</p>
 <p>The probe winner starts as the only proxy in the rotation. An alternate joins it by actually answering, and <b>three failures drops it</b> for the rest of that site. Sitemap concurrency then follows how many proxies are genuinely working, at 3 requests per working proxy: spreading load helps only while they all work, and rotating onto one that is stalling just moves the stall around.</p>
 <p>Proxy latency and failure rates are scored, shared across every site in the run, and kept in <code>localStorage</code> between runs, so the ordering starts from whatever was actually fast last time instead of relearning it each run.</p>
+
+<h3><span class="n">1.1c</span>Your own proxy</h3>
+<p>The public proxies share datacentre address ranges, and a site behind a WAF blocks those ranges wholesale. The proxy connects, the site answers 403, and no amount of retrying changes it. This is the one discovery failure a browser-only tool cannot engineer around, because the block is on the address, not on the request.</p>
+<p>A proxy on an address you control is the way out, and it is also better for privacy: the audited URLs go to your server rather than to a stranger&rsquo;s. Paste its template into <b>Your own CORS proxy</b> under &ldquo;Sampling and run options&rdquo;, using <code>{url}</code> where the encoded target goes. It is tried straight after direct fetch, ahead of the public pool, and it works even with public proxies switched off.</p>
+<p id="your-own-proxy">A Cloudflare Worker is the quickest one to stand up. Create a Worker, paste this, deploy, and use <code>https://&lt;your-worker&gt;.workers.dev/?url={url}</code>:</p>
+<div class="scroller"><pre><code>export default {
+  async fetch(request) {
+    const target = new URL(request.url).searchParams.get('url');
+    if (!target) return new Response('missing url', { status: 400 });
+
+    // Only proxy for your own page, and only plain GETs.
+    const cors = {
+      'Access-Control-Allow-Origin': 'https://pagespeed.jakelabate.com',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS'
+    };
+    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
+    if (request.method !== 'GET') return new Response('GET only', { status: 405 });
+
+    const upstream = await fetch(target, {
+      headers: { 'User-Agent': 'PageSpeedSampler/1.0 (+sitemap reader)' },
+      redirect: 'follow'
+    });
+    return new Response(upstream.body, {
+      status: upstream.status,
+      headers: { ...cors, 'Content-Type': upstream.headers.get('content-type') || 'text/plain' }
+    });
+  }
+};</code></pre></div>
+<div class="note"><b>Leave the allow-origin locked to your own page.</b> A worker that answers <code>*</code> is an open proxy anyone can point at anything, and it will be found.</div>
 
 <h3><span class="n">1.2</span>Find the sitemap</h3>
 <p><code>robots.txt</code> is checked first for a <code>Sitemap:</code> directive, which is authoritative when present. If there is none, 22 common paths are probed <b>in parallel</b>, 10 at a time through a proxy and 14 direct:</p>

@@ -396,6 +396,15 @@ footer .by{margin-left:auto}
         </div>
       </div>
       <div style="margin-top:14px">
+        <label class="f" for="customProxy">Your own CORS proxy (optional)</label>
+        <input type="text" id="customProxy" placeholder="https://your-worker.workers.dev/?url={url}" spellcheck="false">
+        <div class="hint">Sites behind a WAF block the public proxies&rsquo; datacentre addresses, and no browser-only tool can
+          get around that. Your own proxy is a different address and usually is not blocked. Use <code>{url}</code> where the
+          encoded target goes, or <code>{raw}</code> for an unencoded one. It is tried first, ahead of the public proxies, and
+          the URLs go to your server rather than to a stranger&rsquo;s.
+          <a href="flow.html#your-own-proxy">Worker you can paste, takes a minute</a>.</div>
+      </div>
+      <div style="margin-top:14px">
         <label class="f" for="manual">Manual URL list (fallback or addition)</label>
         <textarea id="manual" placeholder="https://example.com/&#10;https://example.com/about&#10;https://example.com/contact" spellcheck="false"></textarea>
         <div class="hint">One URL per line. Used on its own if discovery fails, or merged in if discovery works. Applies per site: paste URLs for several sites and each takes only its own.</div>
@@ -492,7 +501,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#gclient','#clientName','#reportDate','#repeats'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#gclient','#clientName','#reportDate','#repeats','#customProxy'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -573,6 +582,27 @@ const PROXIES = [
   { name:'thingproxy', url: u => 'https://thingproxy.freeboard.io/fetch/' + u }
 ];
 
+/* A proxy the user runs themselves. The public ones share datacentre address
+   ranges that WAFs block wholesale, which is the one discovery failure a
+   browser-only tool genuinely cannot engineer around; a proxy on an address the
+   user controls is the way out. It is tried ahead of the public pool, both
+   because it is likelier to work and because sending the audited URLs to their
+   own server beats sending them to a stranger's. */
+function customProxy(){
+  const el = document.getElementById('customProxy');
+  const tpl = el ? el.value.trim() : '';
+  if(!tpl || !/^https?:\/\//i.test(tpl)) return null;
+  if(!/\{url\}|\{raw\}/.test(tpl)) return null;
+  return { name:'yours', custom:true,
+    url: u => tpl.replace(/\{url\}/g, encodeURIComponent(u)).replace(/\{raw\}/g, u) };
+}
+/* Every place that used to read PROXIES now reads this, so a custom entry
+   participates in probing, hedging, rotation and the retry sweep unchanged. */
+function transports(){
+  const mine = customProxy();
+  return mine ? [PROXIES[0], mine].concat(PROXIES.slice(1)) : PROXIES;
+}
+
 /* Health is shared across every site in a run and across runs in this tab. A
    proxy that is timing out for one site is timing out for all of them, and
    rediscovering that fact once per site is most of what made a multi-site
@@ -580,7 +610,7 @@ const PROXIES = [
    ordering settles on whatever is actually fast right now. */
 const proxyHealth = (function(){
   const h = {};
-  PROXIES.forEach(p => { h[p.name] = { ok:0, fail:0, ms:600 }; });
+  PROXIES.concat([{ name:'yours' }]).forEach(p => { h[p.name] = { ok:0, fail:0, ms:600 }; });
   try{
     const saved = JSON.parse(localStorage.getItem('pss.proxyHealth') || 'null');
     if(saved) for(const k in h) if(saved[k]) Object.assign(h[k], saved[k]);
@@ -646,7 +676,7 @@ function newCtx(allowProxy){
       }
     },
     order(fanout){
-      if(!this.tp) return [PROXIES[0]];
+      if(!this.tp) return [transports()[0]];
       if(!this.proxied()) return [this.tp];
       let rot = this.rotation.filter(p => !this.out(p));
       if(!rot.length) rot = [this.tp];
@@ -735,8 +765,16 @@ async function fetchText(url, opts){
    Race them instead, and keep the body: robots.txt is the probe target and the
    first thing discovery needs, so fetching it twice was pure waste. */
 async function probeTransport(origin, allowProxy, log, ctx){
-  const cands = PROXIES.filter(p => p.name === 'direct' || allowProxy)
+  /* A proxy the user runs is not a public proxy, so it stays available even
+     with public ones switched off, and it is not reordered by health behind
+     five strangers: it goes straight after direct. */
+  const all = transports();
+  const mine = all.filter(p => p.custom);
+  const pool = all.filter(p => !p.custom && (p.name === 'direct' || allowProxy))
     .slice().sort((a,b) => healthScore(a.name) - healthScore(b.name));
+  const cands = pool[0] && pool[0].name === 'direct'
+    ? [pool[0]].concat(mine, pool.slice(1))
+    : mine.concat(pool);
   if(!cands.length){ ctx.tp = null; return null; }
 
   /* Two targets, not one. robots.txt is the file discovery wants, but a site is
@@ -814,12 +852,13 @@ async function probeTransport(origin, allowProxy, log, ctx){
   ctx.robots = winner.robots;
   ctx.solid = !!winner.solid;
   ctx.rotation = [winner.p];
-  ctx.alts = PROXIES.filter(p => p.name !== 'direct' && p !== winner.p && allowProxy)
-    .sort((a,b) => healthScore(a.name) - healthScore(b.name)).slice(0, 3);
-  logLine(log, 'Transport: ' + (winner.p.name === 'direct'
-    ? 'direct browser fetch (site sends CORS headers)'
-    : 'public proxy "' + winner.p.name + '"' +
-      (ctx.alts.length ? ', hedging to ' + ctx.alts.map(a => a.name).join(' and ') : '')) +
+  ctx.alts = cands.filter(p => p.name !== 'direct' && p !== winner.p).slice(0, 3);
+  const kind = winner.p.name === 'direct' ? 'direct browser fetch (site sends CORS headers)'
+    : winner.p.custom ? 'your own proxy'
+    : 'public proxy "' + winner.p.name + '"';
+  logLine(log, 'Transport: ' + kind +
+    (winner.p.name !== 'direct' && ctx.alts.length
+      ? ', hedging to ' + ctx.alts.map(a => a.name).join(' and ') : '') +
     (winner.solid ? '' : ' (reached the site but could not read robots.txt or the homepage body)'), 'ok');
   saveHealth();
   return winner.p;
@@ -1038,7 +1077,7 @@ async function discover(origin, opts, log, ctx){
   if(failed.length && !outOfTime()){
     const SWEEP_CAP = 4;
     const sweep = failed.slice(0, SWEEP_CAP);
-    const alts = PROXIES.filter(pr => pr !== ctx.tp && pr.name !== 'direct' && !ctx.out(pr));
+    const alts = transports().filter(pr => pr !== ctx.tp && pr.name !== 'direct' && !ctx.out(pr));
     logLine(log, '  retrying ' + sweep.length + ' failed sitemap' + (sweep.length > 1 ? 's' : '') +
       ' through a different proxy' + (failed.length > SWEEP_CAP ? ', ' + (failed.length - SWEEP_CAP) + ' left' : '') + '…', 'dim');
     const stillFailed = failed.slice(SWEEP_CAP);
@@ -6031,7 +6070,8 @@ async function discoverAll(origins, sweepThrough){
   let html = '<div class="note">' + sites.map(s =>
     '<b>' + esc(s.label) + '</b>: ' + s.items.length + ' URLs from ' + s.sitemaps.length + ' sitemap file' +
     (s.sitemaps.length === 1 ? '' : 's') +
-    (s.transport !== 'direct' ? ' (via the ' + esc(s.transport) + ' proxy)' : '')
+    (s.transport === 'direct' ? '' : s.transport === 'yours'
+      ? ' (via your own proxy)' : ' (via the ' + esc(s.transport) + ' proxy)')
   ).join('<br>') + '</div>';
   if(notes.length) html += '<div class="err">' + notes.join('<br>') + '</div>';
   $('#discSummary').innerHTML = html;
