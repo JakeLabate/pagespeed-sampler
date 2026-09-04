@@ -61,6 +61,43 @@ one on a single page.
 The LCP element parser walks the audit details tree rather than indexing a fixed path,
 because the node moved between Lighthouse versions and will move again.
 
+### What the bytes cost in seconds
+
+A byte figure is an engineering fact. The same figure in seconds, on the connection the
+client's customers actually use, is the argument for paying to fix it. Every byte saving
+is therefore also expressed as arrival time across four connections:
+
+| Band | Throughput | RTT | Source |
+|---|---|---|---|
+| Regular 3G | 700 Kbps | 300 ms | Lighthouse `mobileRegular3G`, aligned to the CrUX 3G definition |
+| Slow 4G | 1,638 Kbps | 150 ms | Lighthouse `mobileSlow4G`, the PSI **mobile** default, identical to WebPageTest Fast 3G |
+| Dense 4G | 10,240 Kbps | 40 ms | Lighthouse `desktopDense4G`, the PSI **desktop** default |
+| Fast broadband | 51,200 Kbps | 15 ms | Not a preset. A stated 50 Mbps assumption |
+
+The first three are Lighthouse's own throttling constants, so the figures reconcile with
+the tool a client will check the work against instead of contradicting it. The fourth is
+labelled an assumption and is included on purpose: a fix worth 8 seconds on a phone and a
+tenth of a second at a desk is a more honest story, and a more persuasive one, than a
+single number.
+
+The arithmetic is `bytes x 8 / (Kbps x 1024)`, and Kbps is kibibits per second because
+that is what Lighthouse means by it. This is **transfer time, not a page-load
+simulation**. Bytes on the critical path give back more than the figure shown, because
+everything behind them starts sooner; bytes off it can give back less. Every surface that
+prints these numbers prints that caveat with them.
+
+Where it appears:
+
+- **App**, four columns on the Opportunities table
+- **Report**, a band strip on every recommendation that removes bytes, plus a Connection bands note in the Method section
+- **Excel and Google Sheets**, four columns on the Opportunities tab, documented on the Method and Glossary tabs
+- **JSON**, a `connection_bands` block describing the model and an `opportunities` array with `seconds_saved_per_page` per band
+- **CSV**, the page's own weight as arrival time per band, per row
+
+`total-byte-weight` reports a page's whole weight rather than a saving, so it gets the
+same arithmetic under a different label: how long that weight takes to arrive, not what
+removing it gives back.
+
 ## Charts
 
 The same three charts appear in the app, the document, the Excel workbook and the Google

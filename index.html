@@ -2004,7 +2004,7 @@ function aggregateOpportunities(rows){
     resources: Array.from(a.resources.values()).sort((x,y) => (y.bytes - x.bytes) || (y.ms - x.ms)).slice(0, 40),
     avgMs: a.pages ? a.ms / a.pages : 0,
     avgBytes: a.pages ? a.bytes / a.pages : 0
-  }));
+  })).map(a => Object.assign(a, { secs: connSeconds(a.avgBytes) }));
   // time first, since that is what a user feels; byte-only findings rank beneath
   list.sort((a, b) => (b.ms - a.ms) || (b.bytes - a.bytes));
   return list;
@@ -2164,6 +2164,57 @@ function aggregateThirdParty(rows){
     }
   }
   return Array.from(by.values()).sort((a, b) => (b.avgMs - a.avgMs) || (b.avgBytes - a.avgBytes));
+}
+
+/* ------------------------------------------------- what the bytes cost in time
+   "726 KB a page" does not move anyone. "8.3 seconds on a 3G phone" does, and
+   it is the same fact.
+
+   The first three bands are Lighthouse's own throttling presets, taken from the
+   constants Lighthouse itself runs on, so the figures reconcile with the tool
+   the client will check the work against rather than contradicting it. Kbps is
+   kibibits per second there, hence 1024 rather than 1000 below. The fourth band
+   is not a preset and is labelled as an assumption; it is included because a
+   fix that saves 8 seconds on a phone and a tenth of a second at a desk is a
+   more honest, and more persuasive, story than one number. */
+const CONNECTIONS = [
+  { id:'r3g',  label:'Regular 3G',    short:'3G',        kbps: 700,   rttMs: 300,
+    note:'Lighthouse mobileRegular3G. Aligned to the Chrome UX Report 3G definition, under 700 Kbps downlink.' },
+  { id:'s4g',  label:'Slow 4G',       short:'Slow 4G',   kbps: 1.6 * 1024, rttMs: 150,
+    note:'Lighthouse mobileSlow4G, the PageSpeed Insights mobile default. Roughly the slowest quarter of 4G connections, and identical to WebPageTest Fast 3G.' },
+  { id:'d4g',  label:'Dense 4G',      short:'Dense 4G',  kbps: 10 * 1024, rttMs: 40,
+    note:'Lighthouse desktopDense4G, the PageSpeed Insights desktop default. Dense 4G, 25th percentile.' },
+  { id:'bb',   label:'Fast broadband', short:'Broadband', kbps: 50 * 1024, rttMs: 15,
+    note:'Not a Lighthouse preset. A stated assumption of 50 Mbps, included to show where a fix stops mattering.' }
+];
+
+/* Transfer time for the bytes the fix removes: bits over bits per second.
+   Deliberately not a page-load simulation. Bytes on the critical path save more
+   than this because everything behind them starts sooner; bytes off it can save
+   less. The wording everywhere this appears says so. */
+function secondsOn(bytes, kbps){
+  if(!bytes || !isFinite(bytes) || !kbps) return null;
+  return (bytes * 8) / (kbps * 1024);
+}
+function connSeconds(bytes){
+  const out = {};
+  CONNECTIONS.forEach(c => { out[c.id] = secondsOn(bytes, c.kbps); });
+  return out;
+}
+/* Seconds, not milliseconds, because the request was for seconds and because a
+   figure a client repeats out loud has to be sayable. Under a tenth of a second
+   two decimals, under ten seconds one, above that none. */
+function fmtSecs2(sec){
+  if(sec == null || !isFinite(sec)) return '';
+  if(sec < 0.1) return sec.toFixed(2) + ' s';
+  if(sec < 10) return sec.toFixed(1) + ' s';
+  return Math.round(sec) + ' s';
+}
+/* The band that carries the argument: the slowest one where the saving is worth
+   saying out loud. */
+function headlineBand(bytes){
+  const s = secondsOn(bytes, CONNECTIONS[0].kbps);
+  return s != null && s >= 0.1 ? { conn: CONNECTIONS[0], sec: s } : null;
 }
 
 const fmtBytes = b => {
@@ -3417,13 +3468,17 @@ function opportunitySection(rows){
   h.setAttribute('style','margin:26px 0 4px');
   wrap.appendChild(h);
   const p = el('p','hint','Lighthouse findings across the ' + rows.length +
-    ' measurements in this run. Figures are per page, which is what a fix actually returns; the order is by total impact, so a small saving on every page outranks a large one on a single page. Expand a row for the files responsible.');
+    ' measurements in this run. Figures are per page, which is what a fix actually returns; the order is by total impact, so a small saving on every page outranks a large one on a single page. Expand a row for the files responsible. ' +
+    'The four right-hand columns are how long the removed bytes take to arrive on ' +
+    CONNECTIONS.map(c => c.label.toLowerCase()).join(', ') + ': transfer time only, not a page-load simulation.');
   p.setAttribute('style','margin:0 0 12px');
   wrap.appendChild(p);
 
   const tw = el('div','tablewrap');
   let html = '<table><thead><tr><th>Finding</th><th class="n">Pages hit</th>' +
-    '<th class="n">Time a page</th><th class="n">Bytes a page</th><th>What to do</th></tr></thead><tbody>';
+    '<th class="n">Time a page</th><th class="n">Bytes a page</th>' +
+    CONNECTIONS.map(c => '<th class="n" title="' + esc(c.note) + '">' + esc(c.short) + '</th>').join('') +
+    '<th>What to do</th></tr></thead><tbody>';
   opps.forEach((o, i) => {
     const hasAdvice = !!adviceBlockHTML(o.id, rows);
     const expandable = o.resources.length || hasAdvice;
@@ -3433,9 +3488,12 @@ function opportunitySection(rows){
       '<td class="n">' + o.pages + ' of ' + rows.length + '</td>' +
       '<td class="n">' + (o.avgMs ? esc(fmtMs(o.avgMs)) : '<span style="color:var(--muted)">not timed</span>') + '</td>' +
       '<td class="n">' + (o.avgBytes ? esc(fmtBytes(o.avgBytes)) : '<span style="color:var(--muted)">n/a</span>') + '</td>' +
+      CONNECTIONS.map(c => '<td class="n">' + (o.avgBytes
+        ? esc(fmtSecs2(secondsOn(o.avgBytes, c.kbps)))
+        : '<span style="color:var(--muted)">n/a</span>') + '</td>').join('') +
       '<td style="max-width:340px">' + esc(o.fix) + '</td></tr>';
     if(expandable){
-      html += '<tr class="oppdetail hidden" data-for="' + i + '"><td colspan="5" style="padding:0">' +
+      html += '<tr class="oppdetail hidden" data-for="' + i + '"><td colspan="' + (5 + CONNECTIONS.length) + '" style="padding:0">' +
         '<div style="padding:10px 12px 12px;background:var(--plane)">' +
         adviceBlockHTML(o.id, rows).replace('margin-top:10px;padding-top:9px;border-top:1px solid var(--grid)', 'margin:0 0 12px') +
         (o.resources.length ? '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:7px">Files responsible</div>' : '') +
@@ -4319,11 +4377,18 @@ function runRules(rows, sites){
           .forEach(a => advice.push({ site: site.label, source: a.source, text: a.text, curated: a.curated }));
       }
     }
+    /* total-byte-weight reports the page's whole weight, not a saving, so it
+       gets the same arithmetic under an honest label rather than being told to
+       claim a saving it does not represent. */
+    const opp = rule.audit ? c.opp(rule.audit) : null;
+    const bytes = opp && opp.avgBytes > 0 ? opp.avgBytes : null;
     fired.push({
       id: rule.id, order: i, audit: rule.audit || null,
       severity: rule.severity(c), risk: rule.risk, effort: rule.effort,
       title: rule.title(c), thesis: rule.thesis(c),
-      evidence: rule.evidence(c), why: rule.why, fix: rule.fix(c), advice
+      evidence: rule.evidence(c), why: rule.why, fix: rule.fix(c), advice,
+      bytes, bytesAreWeight: rule.audit === 'total-byte-weight',
+      secs: bytes ? connSeconds(bytes) : null
     });
   });
   fired.sort((a, b) => (SEV_ORDER[a.severity] - SEV_ORDER[b.severity]) || (a.order - b.order));
@@ -4417,6 +4482,7 @@ function buildReportModel(){
     { h:'Sources', p: 'Google PageSpeed Insights API v5, which runs Lighthouse on Google\'s infrastructure. Where Google holds Chrome User Experience Report data for a URL, the real-user figures are reported alongside the lab ones and labelled as field data. URL inventory comes from each site\'s own XML sitemap.' },
     { h:'Scope', rows: params },
     { h:'Assumptions', p: 'Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ, so a site with few measured pages carries a wider error bar. Thresholds are Google\'s published Core Web Vitals bands, listed on the glossary tab.' },
+    { h:'Connection bands', p: 'Byte savings are also expressed as the time those bytes take to arrive on four connections: Regular 3G at 700 Kbps, Slow 4G at 1,638 Kbps, Dense 4G at 10,240 Kbps and fast broadband at 51,200 Kbps. The first three are Lighthouse\u2019s own throttling presets, so the figures reconcile with the tool that produced the measurements: Slow 4G is the PageSpeed Insights mobile default and Dense 4G its desktop default. The broadband band is a stated assumption, not a preset. The arithmetic is bytes times eight divided by throughput, which is transfer time and not a page-load simulation: bytes on the critical path give back more than the figure shown because everything behind them starts sooner, and bytes off it can give back less.' },
     { h:'Prepared by', p: 'Jake Labate, SEO Consultant. Generated ' + new Date().toLocaleString() + '.' }
   ]});
 
@@ -4454,9 +4520,10 @@ function buildReportModel(){
         platformAdvice(o.id, site.stack, packsForSite(rs, site.origin))
           .forEach(a => adv.push((state.sites.length > 1 ? site.label + ' / ' : '') + a.source + ': ' + a.text));
       }
-      oppRows.push([strat, o.label, o.pages, Math.round(o.avgMs) || null, Math.round(o.avgBytes) || null,
-                    Math.round(o.ms) || null, Math.round(o.bytes) || null, o.sites.join(', '), o.fix,
-                    adv.join('  |  ') || null]);
+      oppRows.push([strat, o.label, o.pages, Math.round(o.avgMs) || null, Math.round(o.avgBytes) || null]
+        .concat(CONNECTIONS.map(c => o.avgBytes ? r2(o.secs[c.id]) : null))
+        .concat([Math.round(o.ms) || null, Math.round(o.bytes) || null, o.sites.join(', '), o.fix,
+                 adv.join('  |  ') || null]));
       for(const r of o.resources){
         resRows.push([strat, o.label, r.url, r.pages, Math.round(r.bytes), Math.round(r.ms)]);
       }
@@ -4468,9 +4535,15 @@ function buildReportModel(){
   }
   if(oppRows.length){
     tab('Opportunities', { kind:'table',
-      headers:['Strategy','Finding','Pages hit','Wasted ms a page','Wasted bytes a page','Wasted ms across sample','Wasted bytes across sample','Sites','What to do','On this stack'],
-      rows: oppRows, widths:[92,230,80,130,140,150,160,150,420,520],
-      note:'Lighthouse findings across every measurement. The per-page figures are what a fix actually returns; the across-sample totals are a breadth signal and are not time anyone can save at once. Ordered by total impact. The files responsible are on the next tab.' });
+      headers:['Strategy','Finding','Pages hit','Wasted ms a page','Wasted bytes a page']
+        .concat(CONNECTIONS.map(c => 'Seconds saved, ' + c.label))
+        .concat(['Wasted ms across sample','Wasted bytes across sample','Sites','What to do','On this stack']),
+      rows: oppRows, widths:[92,230,80,130,140,124,124,124,124,150,160,150,420,520],
+      note:'Lighthouse findings across every measurement. The per-page figures are what a fix actually returns; the across-sample totals are a breadth signal and are not time anyone can save at once. Ordered by total impact. ' +
+        'The seconds columns convert the bytes a fix removes into arrival time on ' +
+        CONNECTIONS.map(c => c.label + ' at ' + Math.round(c.kbps) + ' Kbps').join(', ') +
+        '. That is transfer time only, not a page-load simulation: bytes on the critical path save more than this, bytes off it can save less. ' +
+        'The first three bands are Lighthouse\u2019s own throttling presets. The files responsible are on the next tab.' });
   }
   if(resRows.length){
     tab('Offending resources', { kind:'table',
@@ -4706,7 +4779,7 @@ function buildReportModel(){
   });
   tab('Glossary and rubric', { kind:'table', headers:['Metric','What it measures','Good','Needs work','Poor'],
     rows: rubric, widths:[130,430,150,170,150], noBand:true,
-    note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100. On the Opportunities tab, wasted time and bytes are Lighthouse\'s own estimates of what removing the problem would save, summed across every measured page.' });
+    note:'Thresholds are Google\'s published Core Web Vitals bands. Scores are the Lighthouse performance score, 0 to 100. On the Opportunities tab, wasted time and bytes are Lighthouse\'s own estimates of what removing the problem would save, summed across every measured page, and the seconds columns restate the per-page byte saving as arrival time on four connections. Byte savings are also expressed as the time those bytes take to arrive on four connections: Regular 3G at 700 Kbps, Slow 4G at 1,638 Kbps, Dense 4G at 10,240 Kbps and fast broadband at 51,200 Kbps. The first three are Lighthouse\u2019s own throttling presets, so the figures reconcile with the tool that produced the measurements: Slow 4G is the PageSpeed Insights mobile default and Dense 4G its desktop default. The broadband band is a stated assumption, not a preset. The arithmetic is bytes times eight divided by throughput, which is transfer time and not a page-load simulation: bytes on the critical path give back more than the figure shown because everything behind them starts sooner, and bytes off it can give back less.' });
 
   const primaryRows = ok.filter(r => r.strategy === strategies[0]);
   const cs = chartSet(primaryRows, state.sites);
@@ -5043,6 +5116,15 @@ const REPORT_CSS = [
 '.pill em{font-style:normal;opacity:.6;margin-right:4px}',
 '.lede{font-size:11.5pt;color:var(--ink2);margin-bottom:13px;max-width:66ch}',
 '.two{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:22px;align-items:start}',
+'.connstrip{margin:0 0 14px;padding:11px 13px;background:var(--soft);border-radius:4px;',
+'break-inside:avoid;page-break-inside:avoid}',
+'.connstrip .lbl{margin-bottom:8px}',
+'.bands{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}',
+'.band{border-left:2px solid var(--teal);padding-left:9px}',
+'.band b{display:block;font-family:"Space Grotesk",sans-serif;font-size:17pt;line-height:1.05;color:var(--ink)}',
+'.band span{font-family:"IBM Plex Mono",monospace;font-size:7.5pt;letter-spacing:.07em;',
+'text-transform:uppercase;color:var(--muted)}',
+'.bandnote{font-size:8.5pt;color:var(--muted);margin:9px 0 0;line-height:1.45}',
 '.lbl{font-family:"IBM Plex Mono",monospace;font-size:8pt;letter-spacing:.1em;text-transform:uppercase;',
 'color:var(--muted);margin:0 0 6px}',
 '.two .lbl:not(:first-child){margin-top:14px}',
@@ -5171,6 +5253,7 @@ function renderReportHTML(m){
       ['Report date', E(meta.date)]
     ]) +
     '<h3>Assumptions</h3><p>Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ. Thresholds are Google\'s published Core Web Vitals bands, listed in the rubric.</p>' +
+    '<h3>Connection bands</h3><p>Byte savings are also expressed as the time those bytes take to arrive on four connections: Regular 3G at 700 Kbps, Slow 4G at 1,638 Kbps, Dense 4G at 10,240 Kbps and fast broadband at 51,200 Kbps. The first three are Lighthouse\u2019s own throttling presets, so the figures reconcile with the tool that produced the measurements: Slow 4G is the PageSpeed Insights mobile default and Dense 4G its desktop default. The broadband band is a stated assumption, not a preset. The arithmetic is bytes times eight divided by throughput, which is transfer time and not a page-load simulation: bytes on the critical path give back more than the figure shown because everything behind them starts sooner, and bytes off it can give back less.</p>' +
     '<div class="callout"><b>Every statement in this document is generated by a rule.</b> No finding is written by hand or by a language model. Each recommendation names the measured condition that triggered it, and the appendix lists every rule that was evaluated, including those that did not fire.<br><br>' +
     'Rendering is reproducible: the same measurements and the same report date always produce a byte-identical document. The <em>measurements</em> are not reproducible, because Lighthouse returns different numbers for identical requests. Re-running this audit will produce different figures and may produce a different set of findings. This document describes one measurement, not a fixed property of the site.</div>');
 
@@ -5347,6 +5430,7 @@ function cardHTML(f, num, sevPill, plainPill){
       plainPill('Fix risk ', LEVEL_PILL[f.risk].label) +
       plainPill('Effort ', LEVEL_PILL[f.effort].label) + '</div>' +
     '<p class="lede">' + esc(f.thesis) + '</p>' +
+    (f.secs ? connStripHTML(f) : '') +
     '<div class="two"><div><div class="lbl">Evidence</div>' +
       kvTable(f.evidence) + '</div>' +
     '<div><div class="lbl">Why it matters</div><p>' + esc(f.why) + '</p>' +
@@ -5363,6 +5447,20 @@ function cardHTML(f, num, sevPill, plainPill){
 /* Three rows all labelled "Largest bundle" read as a rendering fault rather
    than a list. Consecutive rows sharing a key collapse into one row whose value
    is the list, and the label is pluralised. */
+/* A byte figure is an engineering fact. The same figure in seconds, on the
+   connection the client's customers actually use, is the argument for paying to
+   fix it. This puts both on the page, with the method stated so nobody has to
+   take it on trust. */
+function connStripHTML(f){
+  const label = f.bytesAreWeight ? 'How long this weight takes to arrive' : 'What removing it gives back, per page';
+  return '<div class="connstrip"><div class="lbl">' + label + '</div><div class="bands">' +
+    CONNECTIONS.map(c =>
+      '<div class="band"><b>' + esc(fmtSecs2(f.secs[c.id])) + '</b><span>' + esc(c.label) + '</span></div>'
+    ).join('') +
+    '</div><p class="bandnote">' + esc(fmtBytes(f.bytes)) +
+    ' a page, as arrival time at ' + CONNECTIONS.map(c => Math.round(c.kbps) + ' Kbps').join(', ') +
+    '. Transfer time only, not a page-load simulation: bytes on the critical path give back more than this because everything behind them starts sooner.</p></div>';
+}
 function kvTable(rows){
   const out = [];
   for(const [k, v] of rows){
@@ -5416,6 +5514,12 @@ function exportRows(){
     cls: r.data ? r.data.cls : '', tbt_ms: r.data ? r.data.tbt : '',
     speed_index_ms: r.data ? r.data.si : '', ttfb_ms: r.data ? r.data.ttfb : '',
     total_bytes: r.data ? r.data.bytes : '',
+    /* The same bytes the row already carries, said in the unit a client
+       understands. Transfer time for the page's weight, per connection. */
+    page_weight_s_3g: r.data && r.data.bytes ? r2(secondsOn(r.data.bytes, 700)) : '',
+    page_weight_s_slow_4g: r.data && r.data.bytes ? r2(secondsOn(r.data.bytes, 1.6 * 1024)) : '',
+    page_weight_s_dense_4g: r.data && r.data.bytes ? r2(secondsOn(r.data.bytes, 10 * 1024)) : '',
+    page_weight_s_broadband: r.data && r.data.bytes ? r2(secondsOn(r.data.bytes, 50 * 1024)) : '',
     field_lcp_ms: r.data ? r.data.fieldLcp : '', field_cls: r.data ? r.data.fieldCls : '',
     field_inp_ms: r.data ? r.data.fieldInp : '', field_overall: r.data ? r.data.fieldOverall : '',
     fetched_at: r.data ? r.data.fetchedAt : ''
@@ -5466,7 +5570,23 @@ $('#dlJson').addEventListener('click', () => {
     }
     summary[s] = { pages_measured: rs.length, by_site: bySite };
   }
+  const oppRows = {};
+  for(const st of strats){
+    oppRows[st] = aggregateOpportunities(state.results.filter(r => r.strategy === st && r.ok)).map(o => ({
+      id: o.id, label: o.label, fix: o.fix,
+      pages_affected: o.pages, sites: o.sites,
+      bytes_saved_per_page: Math.round(o.avgBytes),
+      lighthouse_ms_saved_per_page: Math.round(o.avgMs),
+      seconds_saved_per_page: Object.fromEntries(CONNECTIONS.map(c => [c.id, r2(o.secs[c.id])])),
+      resources: o.resources.slice(0, 20).map(x => ({ url: x.url, bytes: x.bytes, ms: Math.round(x.ms), pages: x.pages }))
+    }));
+  }
   download('pagespeed-' + runSlug() + '.json', JSON.stringify({
+    connection_bands: {
+      method: 'Transfer time for the bytes a fix removes: bytes x 8 / (Kbps x 1024). Not a page-load simulation. Bytes on the critical path save more than this because everything behind them starts sooner; bytes off it can save less.',
+      bands: CONNECTIONS.map(c => ({ id: c.id, label: c.label, kbps: c.kbps, rtt_ms: c.rttMs, source: c.note }))
+    },
+    opportunities: oppRows,
     sites: state.sites.map(s => ({ origin: s.origin, label: s.label, primary: !!s.primary,
                                    urls_discovered: s.items.length, sitemaps: s.sitemaps })),
     paired_collections: state.compareGroups.map(g => ({
