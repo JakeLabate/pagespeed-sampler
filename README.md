@@ -95,7 +95,30 @@ pass, and four overlapping polygons are unreadable regardless.
 page at 72 or half the site at 45 and half at 99; those are different problems and the
 stat tiles cannot tell them apart.
 
-**Weakest collections.** Mean score by collection, worst first, coloured by band.
+**Weakest collections.** Score by collection, worst first, coloured by band.
+
+### Central tendency
+
+Site and collection figures use the **median** by default, and the mean is available as a
+toggle. A mean lets one catastrophic page decide which collection gets named the weakest,
+which is the wrong claim to put in front of a client. Whichever is chosen, the other is
+shown beside it and every table header names which was used.
+
+### Locale prefixes
+
+Grouping on the first path segment turns a multilingual site into one collection per
+language, which is meaningless and used to fail silently. A first segment is now treated
+as a locale on evidence: either several locale-shaped segments exist, or one covers at
+least 70% of the site. Collections are then formed from the segment beneath it, and the
+detected prefixes are shown in the sample summary so the decision is visible.
+
+### Repeat runs
+
+A single Lighthouse run swings several points between identical executions, so a per-page
+number from one sample cannot survive a client re-running it. **Runs per URL** can be set
+to 2 or 3; each metric folds to the median of its samples and the spread between runs is
+reported. Where the spread is wide, a rule fires saying so, because that is a caveat the
+report should carry rather than a number it should assert.
 
 ### Per surface
 
@@ -200,11 +223,13 @@ condition, a severity, a fix risk, an effort level, an evidence set and a fix, a
 prose is a template filled from the same numbers its evidence table shows, so the
 narrative and the data cannot disagree.
 
-**Determinism** is the point. The only input that varies between two runs on the same
-measurements is the report date, which is an explicit field rather than a call to the
-clock. The app prints the SHA-256 of the generated document; regenerating from the same
-measurements and the same date reproduces that hash exactly. Verified in the test suite
-by generating twice and asserting byte equality.
+**Determinism, precisely.** The *rendering* is reproducible: the same measurements and
+the same report date always produce a byte-identical document, and the app prints its
+SHA-256 so a client copy can be proved unaltered. The *measurements* are not
+reproducible, because Lighthouse returns different numbers for identical requests.
+Re-running an audit produces different figures and may produce a different set of
+findings. The document says so on its method page rather than leaving the distinction to
+be misread.
 
 ### What the rules add over the Opportunities tab
 

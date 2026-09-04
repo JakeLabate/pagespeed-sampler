@@ -258,6 +258,15 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
           <input type="number" id="totalCap" value="100" min="1" max="100">
         </div>
         <div>
+          <label class="f" for="repeats">Runs per URL</label>
+          <select id="repeats">
+            <option value="1" selected>1 (fastest)</option>
+            <option value="2">2, median of both</option>
+            <option value="3">3, median of three</option>
+          </select>
+          <div class="hint">A single Lighthouse run swings several points between identical executions. More runs cost proportionally more quota and give a per-page number you can defend when a client re-runs it.</div>
+        </div>
+        <div>
           <label class="f" for="conc">Batching</label>
           <select id="conc">
             <option value="0" selected>All at once</option>
@@ -274,6 +283,14 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
         </div>
       </div>
       <div class="row c3" style="margin-top:12px">
+        <div>
+          <label class="f" for="centralMode">Site figures use</label>
+          <select id="centralMode">
+            <option value="median" selected>Median</option>
+            <option value="mean">Mean</option>
+          </select>
+          <div class="hint">Median by default: one catastrophic page should not decide which collection gets named the weakest. The other is always shown beside it.</div>
+        </div>
         <div>
           <label class="f">Strategy</label>
           <div style="display:flex;gap:16px;padding-top:5px">
@@ -407,7 +424,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName','#reportDate'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName','#reportDate','#repeats'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -458,6 +475,16 @@ function scoreCell(metric, v){
   return '<span class="scorecell"><span class="dot g-' + g + '"></span>' + fmt(metric, v) +
          '<span class="sr" style="position:absolute;left:-9999px">' + GRADE_LABEL[g] + '</span></span>';
 }
+/* Median by default. A mean lets one catastrophic page decide which collection
+   is named weakest, which is the wrong claim to put in front of a client. Both
+   are available and every figure is labelled with which was used. */
+const CENTRAL = { mode: 'median' };
+function central(a){ return CENTRAL.mode === 'mean' ? mean(a) : median(a); }
+function centralLabel(){ return CENTRAL.mode === 'mean' ? 'Mean' : 'Median'; }
+function centralWord(){ return CENTRAL.mode === 'mean' ? 'mean' : 'median'; }
+function otherLabel(){ return CENTRAL.mode === 'mean' ? 'Median' : 'Mean'; }
+function other(a){ return CENTRAL.mode === 'mean' ? median(a) : mean(a); }
+
 const mean = a => { const v = a.filter(x => x != null && isFinite(x)); return v.length ? v.reduce((s,x)=>s+x,0)/v.length : null; };
 const median = a => { const v = a.filter(x => x != null && isFinite(x)).sort((x,y)=>x-y); if(!v.length) return null;
   const h = Math.floor(v.length/2); return v.length % 2 ? v[h] : (v[h-1]+v[h])/2; };
@@ -1023,19 +1050,53 @@ function normalise(list, origin){
 }
 function hostLabel(origin){ try{ return new URL(origin).host.replace(/^www\./,''); }catch(e){ return origin; } }
 
+/* ------------------------------------------------------- locale prefixes */
+/* Grouping on the first path segment turns every multilingual site into one
+   collection per language, which is meaningless and was failing silently. A
+   first segment is treated as a locale only on evidence: either several
+   locale-shaped segments exist, or one covers most of the site. */
+const LOCALE_RE = /^([a-z]{2,3})(?:[-_]([a-z]{2}|[a-z]{4}|\d{3}))?$/i;
+const NOT_LOCALES = new Set(['api','app','www','cdn','img','css','js','en-us-x','faq','new','all','top','pro','biz','dev','doc','docs','job','jobs','buy','how','why','who','our','the','tag','tags','blog','news','shop','work','team','help','info','main','home','more','see','use','get','set','id','is','it','no','so','be','do','me','my','us','ad']);
+function detectLocalePrefixes(items){
+  const counts = new Map();
+  for(const it of items){
+    const segs = it.path.split('/').filter(Boolean);
+    if(segs.length < 2) continue;                 // a locale prefix implies something beneath it
+    const seg = decodeURIComponent(segs[0]).toLowerCase();
+    counts.set(seg, (counts.get(seg) || 0) + 1);
+  }
+  if(!counts.size) return new Set();
+  const total = Array.from(counts.values()).reduce((a, b) => a + b, 0);
+  const candidates = Array.from(counts).filter(([seg]) => LOCALE_RE.test(seg) && !NOT_LOCALES.has(seg));
+  if(!candidates.length) return new Set();
+  /* Two or more locale-shaped prefixes is strong evidence of a locale tree.
+     A single one is only a locale if nearly the whole site sits under it,
+     because otherwise it is just a section that happens to be two letters. */
+  if(candidates.length >= 2) return new Set(candidates.map(([seg]) => seg));
+  const [seg, n] = candidates[0];
+  return n / total >= 0.7 ? new Set([seg]) : new Set();
+}
+
 /* Collection = first path segment. Single-segment pages collapse into "top-level pages". */
 function groupUrls(items){
   const buckets = new Map();
   const put = (name, it) => { if(!buckets.has(name)) buckets.set(name, []); buckets.get(name).push(it); };
+  const locales = detectLocalePrefixes(items);
   for(const it of items){
-    const segs = it.path.split('/').filter(Boolean);
+    let segs = it.path.split('/').filter(Boolean);
+    it.locale = null;
+    if(segs.length && locales.has(decodeURIComponent(segs[0]).toLowerCase())){
+      it.locale = decodeURIComponent(segs[0]).toLowerCase();
+      segs = segs.slice(1);            // group on what sits beneath the locale
+    }
     if(segs.length === 0){ put('home', it); continue; }
     put(decodeURIComponent(segs[0]).toLowerCase(), it);
   }
+  buckets.locales = Array.from(locales).sort();
   const top = [];
   for(const [name, arr] of Array.from(buckets)){
     if(name === 'home') continue;
-    if(arr.length === 1 && arr[0].path.split('/').filter(Boolean).length === 1){
+    if(arr.length === 1 && arr[0].path.split('/').filter(Boolean).length === (arr[0].locale ? 2 : 1)){
       top.push(arr[0]); buckets.delete(name);
     }
   }
@@ -1050,6 +1111,7 @@ function groupUrls(items){
     .sort((a,b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .forEach(g => ordered.push(g));
   ordered.forEach(([name, arr]) => arr.forEach(it => { it.collection = name; }));
+  ordered.locales = buckets.locales || [];
   return ordered;
 }
 
@@ -1310,6 +1372,8 @@ function renderSelection(){
   const nStrat = (($('#stMobile').checked?1:0) + ($('#stDesktop').checked?1:0)) || 1;
   const allItems = state.sites.reduce((n,s) => n + s.items.length, 0);
   if(multi()) addPill('Sites', state.sites.length);
+  const allLocales = uniq(state.sites.flatMap(x => x.locales || []));
+  if(allLocales.length) addPill('Locale prefixes', allLocales.join(', '));
   addPill('Collections', state.sites.reduce((n,s) => n + s.groups.length, 0));
   addPill('URLs discovered', allItems);
   addPill('Selected', totalSel + (multi() ? '' : ' / ' + cap));
@@ -1374,7 +1438,10 @@ function selectedCategories(){
 function clampInt(v, lo, hi, dflt){ const n = parseInt(v, 10); if(!isFinite(n)) return dflt; return Math.min(hi, Math.max(lo, n)); }
 
 function buildGroupsAndSample(){
-  for(const site of state.sites) site.groups = groupUrls(site.items);
+  for(const site of state.sites){
+    site.groups = groupUrls(site.items);
+    site.locales = site.groups.locales || [];
+  }
   autoMapCollections();
   $('#selCard').classList.remove('hidden');
   renderMapPanel();
@@ -2043,8 +2110,11 @@ async function runTest(){
   state.strategies = strategies;
 
   const urls = Array.from(state.selected);
+  const repeats = clampInt($('#repeats') ? $('#repeats').value : 1, 1, 3, 1);
+  state.repeats = repeats;
   const allJobs = [];
-  for(const it of urls) for(const s of strategies) allJobs.push({ item: it, strategy: s });
+  for(const it of urls) for(const s of strategies) for(let rep = 0; rep < repeats; rep++)
+    allJobs.push({ item: it, strategy: s, rep });
 
   state.running = true; state.cancel = false;
   state.results = []; state.index = new Map();
@@ -2072,17 +2142,40 @@ async function runTest(){
 
   /* Record a result, replacing any earlier attempt at the same url+strategy so a
      retry sweep updates the row instead of duplicating it. */
+  /* Repeated samples of one URL fold into a single row: each numeric metric
+     becomes the median of its samples, and the spread between them is kept so a
+     noisy page can be shown as noisy rather than asserted as fact. */
+  const FOLD_KEYS = ['perf','lcp','fcp','cls','tbt','si','ttfb','bytes','a11y','bp','seo'];
   function record(job, ok, valueOrError){
     const k = job.item.url + '|' + job.strategy;
+    const existing = state.index.has(k) ? state.results[state.index.get(k)] : null;
+    const runs = (existing && existing.runs ? existing.runs.slice() : []);
+    if(ok) runs.push(valueOrError);
+    const folded = runs.length ? foldRuns(runs) : null;
     const row = {
       item: job.item,
       url: job.item.url, path: job.item.path, key: job.item.key,
       site: job.item.site, siteLabel: job.item.siteLabel,
       collection: collectionOf(job.item), strategy: job.strategy,
-      ok, error: ok ? null : valueOrError, data: ok ? valueOrError : null
+      runs, samples: runs.length,
+      ok: runs.length > 0,
+      error: runs.length ? null : (ok ? null : valueOrError),
+      data: folded
     };
-    if(state.index.has(k)) state.results[state.index.get(k)] = row;
+    if(existing) state.results[state.index.get(k)] = row;
     else { state.index.set(k, state.results.length); state.results.push(row); }
+  }
+  function foldRuns(runs){
+    if(runs.length === 1) return Object.assign({}, runs[0], { spread: null, samples: 1 });
+    const out = Object.assign({}, runs[runs.length - 1]);
+    for(const key of FOLD_KEYS){
+      const vals = runs.map(r => r[key]).filter(v => v != null && isFinite(v));
+      if(vals.length) out[key] = median(vals);
+    }
+    const perfs = runs.map(r => r.perf).filter(v => v != null && isFinite(v));
+    out.spread = perfs.length > 1 ? Math.max(...perfs) - Math.min(...perfs) : null;
+    out.samples = runs.length;
+    return out;
   }
 
   const totalJobs = allJobs.length;
@@ -2107,9 +2200,9 @@ async function runTest(){
       return await psiRun(job.item.url, job.strategy, key, cats);
     }, (doneInPass, totalInPass, res) => {
       if(res) record(res.item, res.ok, res.ok ? res.value : res.error);
-      const settled = state.results.length;
+      const settled = state.results.reduce((n, r) => n + (r.samples || (r.ok ? 1 : 1)), 0);
       const failures = state.results.filter(r => !r.ok).length;
-      $('#progBar').style.width = Math.round(settled / totalJobs * 100) + '%';
+      $('#progBar').style.width = Math.round(Math.min(1, settled / totalJobs) * 100) + '%';
       const elapsed = (Date.now() - t0) / 1000;
       const remaining = totalJobs - (settled - failures);
       const eta = settled ? Math.round(elapsed / settled * Math.max(0, totalJobs - settled)) : 0;
@@ -2250,7 +2343,7 @@ function siteComparison(rows, strategy){
   const base = primarySite();
   const h = el('div'); h.style.margin = '0 0 10px';
   h.innerHTML = '<h3>Site comparison, ' + esc(strategy) + '</h3>' +
-    '<p class="hint" style="margin-top:4px">Mean across each site\'s own sample. Deltas are against <b>' +
+    '<p class="hint" style="margin-top:4px">' + centralLabel() + ' across each site\'s own sample. Deltas are against <b>' +
     esc(base.label) + '</b>; green means that site is ahead of yours on that metric. Sample sizes differ, so read a site with few measured pages carefully.</p>';
   wrap.appendChild(h);
 
@@ -2260,7 +2353,7 @@ function siteComparison(rows, strategy){
     .filter(s => bySite.has(s.origin))
     .map(s => {
       const rs = bySite.get(s.origin);
-      return { site: s, n: rs.length, vals: Object.fromEntries(CORE.map(c => [c, mean(rs.map(r => r.data[c]))])) };
+      return { site: s, n: rs.length, vals: Object.fromEntries(CORE.map(c => [c, central(rs.map(r => r.data[c]))])) };
     });
   const baseVals = (entries.find(e => e.site.primary) || entries[0]).vals;
   entries.sort((a,b) => (b.vals.perf ?? -1) - (a.vals.perf ?? -1));
@@ -2366,7 +2459,7 @@ function collectionComparison(rows){
 
     const entries = perSite.map(x => ({
       site: x.site, cname: x.cname, n: x.rs.length, rs: x.rs,
-      vals: Object.fromEntries(CORE.map(c => [c, mean(x.rs.map(r => r.data[c]))]))
+      vals: Object.fromEntries(CORE.map(c => [c, central(x.rs.map(r => r.data[c]))]))
     }));
     const baseEntry = entries.find(e => e.site.primary);
     const baseVals = baseEntry ? baseEntry.vals : null;
@@ -2424,8 +2517,8 @@ function tilesFor(rows, strategy){
   const nCol = uniq(rows.map(r => r.collection)).length;
   const h = el('div'); h.setAttribute('style','margin:24px 0 12px');
   h.innerHTML = '<h3>' + (label ? esc(label) + ' in detail' : 'Site average, ' + esc(strategy)) + '</h3>' +
-    '<p class="hint" style="margin-top:4px">Mean across ' + rows.length + ' measured page' + (rows.length>1?'s':'') +
-    ' in ' + nCol + ' collection' + (nCol>1?'s':'') + '. Median shown beneath each figure.</p>';
+    '<p class="hint" style="margin-top:4px">' + centralLabel() + ' across ' + rows.length + ' measured page' + (rows.length>1?'s':'') +
+    ' in ' + nCol + ' collection' + (nCol>1?'s':'') + '. ' + otherLabel() + ' shown beneath each figure.</p>';
   wrap.appendChild(h);
 
   const keys = ['perf','lcp','cls','tbt','fcp','ttfb','si'];
@@ -2433,7 +2526,7 @@ function tilesFor(rows, strategy){
   const tiles = el('div','tiles');
   for(const k of keys.concat(extra)){
     const vals = rows.map(r => r.data ? r.data[k] : null);
-    const m = mean(vals), md = median(vals);
+    const m = central(vals), md = other(vals);
     const g = grade(k, m);
     const spec = METRICS[k];
     const t = el('div','tile');
@@ -2444,7 +2537,7 @@ function tilesFor(rows, strategy){
       '<div class="val">' + esc(fmt(k, m)) + '</div>' +
       '<div class="meter"><i style="width:' + pctFill.toFixed(1) + '%;background:' + color + '"></i></div>' +
       statusHTML(k, m) +
-      '<div class="meta" style="margin-top:5px">median ' + esc(fmt(k, md)) + '</div>';
+      '<div class="meta" style="margin-top:5px">' + esc(otherLabel().toLowerCase()) + ' ' + esc(fmt(k, md)) + '</div>';
     tiles.appendChild(t);
   }
   wrap.appendChild(tiles);
@@ -2534,7 +2627,7 @@ function chartsSection(rows){
     byCol.get(k).push(r);
   });
   const colRows = Array.from(byCol).map(([label, rs]) => ({
-    label, value: mean(rs.map(r => r.data.perf)) || 0, n: rs.length
+    label, value: central(rs.map(r => r.data.perf)) || 0, n: rs.length
   })).sort((a, b) => a.value - b.value).slice(0, 14);
   if(colRows.length > 1){
     const h3 = el('h3','', 'Weakest collections');
@@ -2620,12 +2713,22 @@ function runIssuesSection(rows, allRows){
   const wrap = el('div');
   const { warnings, captcha } = collectRunIssues(rows);
   const discarded = allRows.filter(r => !r.ok && /^[A-Z_]+:/.test(r.error || ''));
-  if(!warnings.length && !captcha && !discarded.length) return wrap;
+  if(!rows.length) return wrap;
   const d = el('div','note');
   let html = '<b>Run validity</b>';
   if(captcha) html += '<div style="margin-top:6px">Google returned a captcha result of <span class="mono">' + esc(captcha) + '</span>, which means it treated these requests as automated. Results may be degraded.</div>';
   if(discarded.length) html += '<div style="margin-top:6px"><b>' + discarded.length + ' measurement' + (discarded.length > 1 ? 's' : '') +
     ' discarded</b> because Lighthouse reported a runtime error. Those are excluded from every average rather than counted as a bad score.</div>';
+  const noisy = rows.filter(r => r.data && r.data.spread != null && r.data.spread >= 8);
+  if(rows.some(r => r.data && r.data.samples > 1)){
+    const sp = rows.map(r => r.data && r.data.spread).filter(v => v != null);
+    html += '<div style="margin-top:6px">Each page was measured ' + (rows[0].data.samples) +
+      ' times and reduced to the median of its samples. Typical spread between runs of the same page was ' +
+      Math.round(median(sp) || 0) + ' points' + (noisy.length ? ', and ' + noisy.length +
+      ' page' + (noisy.length > 1 ? 's' : '') + ' varied by 8 or more, which is worth knowing before quoting a single-page number' : '') + '.</div>';
+  } else {
+    html += '<div style="margin-top:6px">Each page was measured once. Lighthouse scores swing several points between identical runs, so treat any single page\'s number as approximate; the site figures across many pages are far steadier. Raise <b>Runs per URL</b> if a per-page number needs to survive being re-run.</div>';
+  }
   if(warnings.length) html += '<div style="margin-top:6px">Lighthouse raised warnings on some runs:</div>' +
     warnings.slice(0, 5).map(w => '<div style="margin-top:3px;font-size:12.5px">' +
       (multi() ? '<b>' + esc(w.site) + '</b> · ' : '') + '<span class="tag">' + w.pages + ' pages</span> ' + esc(w.text) + '</div>').join('');
@@ -2898,7 +3001,7 @@ function collectionTable(rows){
   });
   const entries = Array.from(byCol).map(([name, rs]) => ({
     name, n: rs.length, primary: multi() && rs[0].site === primarySite().origin,
-    vals: Object.fromEntries(CORE.map(c => [c, mean(rs.map(r => r.data[c]))]))
+    vals: Object.fromEntries(CORE.map(c => [c, central(rs.map(r => r.data[c]))]))
   })).sort((a,b) => (a.vals.perf ?? 999) - (b.vals.perf ?? 999));
 
   const tw = el('div','tablewrap');
@@ -3272,7 +3375,7 @@ function chartSet(rows, sites){
     if(!byCol.has(k)) byCol.set(k, []);
     byCol.get(k).push(r);
   });
-  const cols = Array.from(byCol).map(([label, rs]) => ({ label, value: mean(rs.map(r => r.data.perf)) || 0, n: rs.length }))
+  const cols = Array.from(byCol).map(([label, rs]) => ({ label, value: central(rs.map(r => r.data.perf)) || 0, n: rs.length }))
                     .sort((a, b) => a.value - b.value).slice(0, 14);
   return { series, groups, cols };
 }
@@ -3283,7 +3386,7 @@ function radarSeriesFor(rows, sites){
   return list.map(s => {
     const rs = s.origin ? rows.filter(r => r.site === s.origin) : rows;
     const values = {};
-    RADAR_AXES.forEach(k => { values[k] = normaliseMetric(k, mean(rs.map(r => r.data[k]))); });
+    RADAR_AXES.forEach(k => { values[k] = normaliseMetric(k, central(rs.map(r => r.data[k]))); });
     return { label: s.label, primary: !!s.primary, values, n: rs.length };
   }).filter(s => s.n > 0);
 }
@@ -3312,7 +3415,7 @@ function ctx(rows, sites){
   const lcpEls = aggregateLcpElements(rows);
   const tp = aggregateThirdParty(rows);
   const n = rows.length;
-  const m = k => mean(rows.map(x => x.data[k]));
+  const m = k => central(rows.map(x => x.data[k]));
   const collections = new Map();
   rows.forEach(x => {
     const k = x.siteLabel + ' /' + x.collection;
@@ -3329,7 +3432,7 @@ function ctx(rows, sites){
     check: id => checks.filter(c => c.id === id),
     perf: m('perf'), lcp: m('lcp'), cls: m('cls'), tbt: m('tbt'), ttfb: m('ttfb'), fcp: m('fcp'),
     collections: Array.from(collections).map(([k, rs]) => ({
-      name: k, pages: rs.length, perf: mean(rs.map(x => x.data.perf)), lcp: mean(rs.map(x => x.data.lcp))
+      name: k, pages: rs.length, perf: central(rs.map(x => x.data.perf)), lcp: central(rs.map(x => x.data.lcp))
     })).sort((a, b) => (a.perf - b.perf) || a.name.localeCompare(b.name))
   };
 }
@@ -3635,6 +3738,30 @@ const RULES = [
                 'Re-measure after, because the composition shifts once the largest slice is cut.']
   },
   {
+    id: 'measurement-noise', audit: null,
+    when: c => {
+      const sp = c.rows.map(r => r.data && r.data.spread).filter(v => v != null);
+      return sp.length >= 3 && median(sp) >= 8;
+    },
+    severity: () => 'minor', risk: 'low', effort: 'low',
+    title: c => {
+      const sp = c.rows.map(r => r.data && r.data.spread).filter(v => v != null);
+      return 'Repeat runs of the same page disagree by ' + Math.round(median(sp)) + ' points';
+    },
+    thesis: () => 'The measurement itself is noisy on this site, which limits how precisely any single page can be quoted.',
+    evidence: c => {
+      const sp = c.rows.map(r => r.data && r.data.spread).filter(v => v != null).sort((a, b) => b - a);
+      const worst = c.rows.filter(r => r.data && r.data.spread != null).sort((a, b) => b.data.spread - a.data.spread).slice(0, 4);
+      return [['Typical spread between runs', Math.round(median(sp)) + ' performance points'],
+              ['Widest spread', Math.round(sp[0]) + ' points']]
+        .concat(worst.map(r => [r.path, Math.round(r.data.spread) + ' point spread across ' + r.data.samples + ' runs']));
+    },
+    why: 'Lighthouse runs on shared infrastructure under simulated throttling, so identical requests return different numbers. A site whose repeats disagree widely usually has variable server response or heavy third-party scripts whose timing changes between loads. It means per-page figures should be quoted as ranges, not points.',
+    fix: () => ['Quote site-level figures, which average the noise out, rather than individual page scores.',
+                'Where a single page matters, raise Runs per URL and cite the median.',
+                'Wide spread is itself a symptom: look at server response and third-party findings, which are the usual causes of run-to-run variance.']
+  },
+  {
     id: 'cache-ttl', audit: 'uses-long-cache-ttl',
     when: c => !!c.opp('uses-long-cache-ttl'),
     severity: () => 'minor', risk: 'low', effort: 'low',
@@ -3785,7 +3912,7 @@ function buildReportModel(){
     if(!rs.length) continue;
     const working = [], needs = [];
     for(const c of SHEET_COLS){
-      const m = mean(rs.map(r => r.data[c.key]));
+      const m = central(rs.map(r => r.data[c.key]));
       const g = grade(c.key, m);
       const line = [c.label, fmt(c.key, m), GRADE_LABEL[g]];
       (g === 'good' ? working : needs).push(line);
@@ -3793,8 +3920,8 @@ function buildReportModel(){
     tab('Summary ' + strat, { kind:'summary', strategy: strat,
       headline: SHEET_COLS.map(c => ({
         label: c.label, key: c.key,
-        value: toDisplay(c.key, mean(rs.map(r => r.data[c.key]))),
-        median: toDisplay(c.key, median(rs.map(r => r.data[c.key])))
+        value: toDisplay(c.key, central(rs.map(r => r.data[c.key]))),
+        median: toDisplay(c.key, other(rs.map(r => r.data[c.key])))
       })),
       working, needs, pages: uniq(rs.map(r => r.url)).length });
     break;   // one summary tab, on the first strategy
@@ -4197,7 +4324,7 @@ async function buildXlsx(model){
       ws.getCell(r, 1).value = 'Headline, ' + t.strategy + ', ' + t.pages + ' pages measured';
       ws.getCell(r, 1).font = { name: BRAND.headFont, size: 11, bold: true, color:{ argb: argb(BRAND.ink) } };
       r += 2;
-      ['Metric','Mean','Median'].forEach((h, i) => {
+      ['Metric', centralLabel(), otherLabel()].forEach((h, i) => {
         const c = ws.getCell(r, i + 1); c.value = h;
         c.style = styleFillFont(BRAND.ink, 'FFFFFF', { name: BRAND.headFont, bold: true, size: 10 });
       });
@@ -4470,7 +4597,7 @@ function reportModelFromRules(rows, sites, meta){
 
   const working = [], failing = [];
   for(const col of SHEET_COLS){
-    const v = mean(rows.map(x => x.data[col.key]));
+    const v = central(rows.map(x => x.data[col.key]));
     (grade(col.key, v) === 'good' ? working : failing).push([col.label, fmt(col.key, v)]);
   }
 
@@ -4499,12 +4626,16 @@ function renderReportHTML(m){
     '<h3>Scope</h3>' + kvTable([
       ['Sites', m.c.sites.map(s => s.origin).join(', ')],
       ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length)],
-      ['Measurements', String(m.c.rows.length) + ' (' + E(meta.strategy) + ')'],
+      ['Measurements', String(m.c.rows.length) + ' pages (' + E(meta.strategy) + ')' +
+      (m.c.rows[0] && m.c.rows[0].data && m.c.rows[0].data.samples > 1
+        ? ', each measured ' + m.c.rows[0].data.samples + ' times and reduced to the median' : ', each measured once')],
+    ['Site figures', (CENTRAL.mode === 'mean' ? 'Mean' : 'Median') + ' across the sample'],
       ['Sampling', 'Up to ' + meta.perGroup + ' URLs per collection, ' + meta.totalCap + ' per site maximum'],
       ['Report date', E(meta.date)]
     ]) +
     '<h3>Assumptions</h3><p>Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ. Thresholds are Google\'s published Core Web Vitals bands, listed in the rubric.</p>' +
-    '<div class="callout"><b>Every statement in this document is generated by a rule.</b> No finding is written by hand or by a language model. Each recommendation names the measured condition that triggered it, and the appendix lists every rule that was evaluated, including those that did not fire. The same measurements always produce the same document.</div>');
+    '<div class="callout"><b>Every statement in this document is generated by a rule.</b> No finding is written by hand or by a language model. Each recommendation names the measured condition that triggered it, and the appendix lists every rule that was evaluated, including those that did not fire.<br><br>' +
+    'Rendering is reproducible: the same measurements and the same report date always produce a byte-identical document. The <em>measurements</em> are not reproducible, because Lighthouse returns different numbers for identical requests. Re-running this audit will produce different figures and may produce a different set of findings. This document describes one measurement, not a fixed property of the site.</div>');
 
   sec('Inventory', 'What was discovered and what was measured.',
     tableHTML(['Site','URLs found','Collections','Pages measured','Mean score'],
@@ -4561,9 +4692,9 @@ function renderReportHTML(m){
       ['critical','serious','moderate','minor'].map(k =>
         '<div class="count"><b>' + m.counts[k] + '</b><span>' + SEV_PILL[k].label + '</span></div>').join('') +
     '</div>' +
-    tableHTML(['Metric','Mean','Band'],
+    tableHTML(['Metric', centralLabel(), 'Band'],
       SHEET_COLS.map(col => {
-        const v = mean(m.c.rows.map(x => x.data[col.key]));
+        const v = central(m.c.rows.map(x => x.data[col.key]));
         return [col.label, fmt(col.key, v), GRADE_LABEL[grade(col.key, v)]];
       })));
 
@@ -4897,7 +5028,7 @@ function tabGrid(t){
   }
   if(t.kind === 'summary'){
     const rows = [['Headline, ' + t.strategy + ', ' + t.pages + ' pages measured'], [],
-                  ['Metric','Mean','Median','', 'What is working','']];
+                  ['Metric', centralLabel(), otherLabel(),'', 'What is working','']];
     const maxLen = Math.max(t.headline.length, t.working.length + t.needs.length + 3);
     const right = [];
     (t.working.length ? t.working : [['Nothing yet','Every metric is outside the good band']])
@@ -5387,6 +5518,18 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
 
 /* deep link: ?site=a.com&site=b.com */
 (function showOrigin(){ const n = $('#originHint'); if(n) n.textContent = location.origin; })();
+(function centralInit(){
+  const n = $('#centralMode');
+  if(!n) return;
+  const saved = localStorage.getItem('pss#centralMode');
+  if(saved) n.value = saved;
+  CENTRAL.mode = n.value;
+  n.addEventListener('change', () => {
+    CENTRAL.mode = n.value;
+    localStorage.setItem('pss#centralMode', n.value);
+    if(state.results.length) renderResults();
+  });
+})();
 (function defaultDate(){ const n = $('#reportDate'); if(n && !n.value) n.value = new Date().toISOString().slice(0, 10); })();
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
