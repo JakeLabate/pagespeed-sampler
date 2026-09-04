@@ -190,6 +190,18 @@ tr.primary td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
 .cmpgroup > summary::-webkit-details-marker{display:none}
 .cmpgroup > summary:before{content:"▸ ";color:var(--muted)}
 .cmpgroup[open] > summary:before{content:"▾ "}
+.panels{margin-top:26px;border-top:1px solid var(--grid)}
+.rpanel{border-bottom:1px solid var(--grid)}
+.rpanel > summary{list-style:none;cursor:pointer;padding:13px 2px;display:flex;align-items:baseline;gap:12px;user-select:none}
+.rpanel > summary::-webkit-details-marker{display:none}
+.rpanel > summary:before{content:"+";font-family:ui-monospace,Menlo,monospace;color:var(--muted);
+  width:12px;flex:none;font-size:13px}
+.rpanel[open] > summary:before{content:"–"}
+.rpanel > summary:hover .pt{color:var(--accent)}
+.rpanel .pt{font-weight:640;font-size:13.5px;color:var(--ink)}
+.rpanel .ps{font-size:12px;color:var(--muted);flex:1}
+.rpanel .rbody{padding:2px 0 20px}
+.rpanel .rbody > div > h3:first-child{margin-top:6px}
 .chartgrid{display:grid;gap:14px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));margin-bottom:14px}
 .chartgrid.two{grid-template-columns:1fr}
 @media(min-width:900px){.chartgrid.two{grid-template-columns:1.35fr 1fr;align-items:start}}
@@ -2302,23 +2314,45 @@ function renderResults(){
   if(!okRows.length){
     box.appendChild(el('div','empty','No successful measurements yet for ' + active + '.'));
   } else {
-    if(multi()){
-      box.appendChild(siteComparison(okRows, active));
-      box.appendChild(roleMatrix(okRows));
-      box.appendChild(collectionComparison(okRows));
-    }
+    /* Always on screen: did it work, what happened, what to do about it. */
+    const issues = runIssuesSection(okRows, rows);
+    if(hasContent(issues)) box.appendChild(issues);
+    if(multi()) box.appendChild(siteComparison(okRows, active));
     box.appendChild(tilesFor(okRows.filter(r => !multi() || r.site === primarySite().origin), active));
     box.appendChild(legend());
-    box.appendChild(runIssuesSection(okRows, rows));
-    box.appendChild(fieldSection(okRows));
-    box.appendChild(chartsSection(okRows));
-    box.appendChild(compositionSection(okRows));
-    box.appendChild(stackSection(okRows));
+    const field = fieldSection(okRows);
+    if(hasContent(field)) box.appendChild(field);
     box.appendChild(opportunitySection(okRows));
-    box.appendChild(checksSection(okRows));
-    box.appendChild(redirectSection(okRows));
-    box.appendChild(collectionTable(okRows));
-    box.appendChild(urlTable(okRows));
+
+    /* Everything below is reference the exports carry better. */
+    const panels = el('div','panels');
+    const add = (t, stat, node, open) => { if(hasContent(node)) panels.appendChild(panel(t, stat, node, open)); };
+
+    add('Charts', 'profile, spread, weakest collections', chartsSection(okRows));
+    if(multi()){
+      const cmp = el('div');
+      const roles = roleMatrix(okRows), pairs = collectionComparison(okRows);
+      if(hasContent(roles)) cmp.appendChild(roles);
+      if(hasContent(pairs)) cmp.appendChild(pairs);
+      add('Like-for-like detail', 'page roles and paired collections', cmp);
+    }
+    const checks = aggregateChecks(okRows);
+    const seoIds = new Set(SEO_AUDITS.map(a => a.id));
+    const nSeo = checks.filter(c => seoIds.has(c.id)).length;
+    add('SEO and quality checks', checks.length ? nSeo + ' SEO, ' + (checks.length - nSeo) + ' quality' : '', checksSection(okRows));
+    const reds = redirectRows(okRows);
+    add('Sitemap redirects', reds.length ? reds.length + ' URLs' : '', redirectSection(okRows));
+    add('Stack', uniq(state.sites.map(x => x.stack && x.stack.primary ? x.stack.primary.label : null).filter(Boolean)).join(', '),
+        stackSection(okRows));
+    const els = aggregateLcpElements(okRows);
+    const diag = el('div');
+    const lt = lcpAndThirdParty(okRows), comp = compositionSection(okRows);
+    if(hasContent(lt)) diag.appendChild(lt);
+    if(hasContent(comp)) diag.appendChild(comp);
+    add('Diagnostics detail', (els.length ? els.length + ' LCP elements, ' : '') + 'third parties, page weight', diag);
+    add('All data', uniq(okRows.map(r => r.url)).length + ' pages, ' + uniq(okRows.map(r => r.collection)).length + ' collections',
+        (function(){ const d = el('div'); d.appendChild(collectionTable(okRows)); d.appendChild(urlTable(okRows)); return d; })());
+    if(panels.children.length) box.appendChild(panels);
   }
   if(failRows.length) box.appendChild(failurePanel(failRows, rows, active));
 }
@@ -2654,6 +2688,63 @@ function chartCard(title, svg, legend, cls){
 }
 
 
+/* The results view had eighteen stacked sections. Most of it is reference the
+   report carries better, so it collapses; the summary keeps the headline number,
+   which means folding a panel never hides whether it is worth opening. */
+function panel(title, stat, node, open){
+  const d = el('details','rpanel');
+  if(open) d.open = true;
+  const sum = document.createElement('summary');
+  sum.innerHTML = '<span class="pt">' + esc(title) + '</span>' +
+                  (stat ? '<span class="ps">' + esc(stat) + '</span>' : '');
+  d.appendChild(sum);
+  const body = el('div','rbody');
+  body.appendChild(node);
+  d.appendChild(body);
+  return d;
+}
+function hasContent(n){ return !!(n && n.children && n.children.length); }
+
+/* The LCP element and third-party rollups were two more top-level sections;
+   they are diagnostics, so they travel together behind one disclosure. */
+function lcpAndThirdParty(rows){
+  const wrap = el('div');
+  const els = aggregateLcpElements(rows);
+  const tp = aggregateThirdParty(rows);
+  const th = activeTheme();
+  if(els.length){
+    const h = el('h3','', 'What the LCP element actually is');
+    h.setAttribute('style','margin:4px 0 4px');
+    wrap.appendChild(h);
+    const p = el('p','hint','The element Lighthouse timed as the largest contentful paint, grouped by selector. One element carrying LCP across a template is one fix with wide reach.');
+    p.setAttribute('style','margin:0 0 10px');
+    wrap.appendChild(p);
+    const t = el('div','tablewrap');
+    t.innerHTML = '<table><thead><tr><th>Element</th><th>Selector</th><th class="n">Pages</th><th class="n">' + esc(centralLabel()) + ' LCP</th></tr></thead><tbody>' +
+      els.slice(0, 12).map(e => '<tr><td><b>' + esc(e.label || '(unnamed)') + '</b>' +
+        (e.snippet ? '<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px">' + esc(e.snippet) + '</div>' : '') + '</td>' +
+        '<td class="urlcell" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px" title="' + esc(e.selector) + '">' + esc(e.selector) + '</td>' +
+        '<td class="n">' + e.pages + '</td><td class="n">' + scoreCell('lcp', e.meanLcp) + '</td></tr>').join('') +
+      '</tbody></table>';
+    wrap.appendChild(t);
+  }
+  if(tp.length){
+    const h = el('h3','', 'Third-party cost');
+    h.setAttribute('style','margin:20px 0 4px');
+    wrap.appendChild(h);
+    const p = el('p','hint','Main-thread blocking time and transfer size each vendor costs on a typical page.');
+    p.setAttribute('style','margin:0 0 10px');
+    wrap.appendChild(p);
+    const t = el('div','tablewrap');
+    t.innerHTML = '<table><thead><tr><th>Entity</th><th class="n">Pages</th><th class="n">Blocking a page</th><th class="n">Transferred a page</th></tr></thead><tbody>' +
+      tp.slice(0, 12).map(e => '<tr><td><b>' + esc(e.entity) + '</b></td><td class="n">' + e.pages + '</td>' +
+        '<td class="n">' + esc(fmtMs(e.avgMs)) + '</td><td class="n">' + esc(fmtBytes(e.avgBytes)) + '</td></tr>').join('') +
+      '</tbody></table>';
+    wrap.appendChild(t);
+  }
+  return wrap;
+}
+
 /* Field data leads, because it is the measurement that correlates with ranking. */
 function fieldSection(rows){
   const wrap = el('div');
@@ -2942,7 +3033,7 @@ function opportunitySection(rows){
   }));
   wrap.appendChild(tw);
 
-  if(lcpEls.length){
+  if(false && lcpEls.length){
     const h2 = el('h3','', 'What the LCP element actually is');
     h2.setAttribute('style','margin:24px 0 4px');
     wrap.appendChild(h2);
@@ -2960,7 +3051,7 @@ function opportunitySection(rows){
     wrap.appendChild(t2);
   }
 
-  if(tp.length){
+  if(false && tp.length){
     const h3 = el('h3','', 'Third-party cost');
     h3.setAttribute('style','margin:24px 0 4px');
     wrap.appendChild(h3);
