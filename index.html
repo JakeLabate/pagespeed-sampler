@@ -293,6 +293,11 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
           <label class="f" for="maxChild">Max child sitemaps</label>
           <input type="number" id="maxChild" value="30" min="1" max="100">
         </div>
+        <div>
+          <label class="f" for="budget">Discovery budget a site</label>
+          <input type="number" id="budget" value="90" min="20" max="600"> 
+          <div class="hint">Seconds. Whatever else happens, discovery for one site ends here and the run continues on whatever was collected.</div>
+        </div>
       </div>
       <div class="row c3" style="margin-top:12px">
         <div>
@@ -354,6 +359,7 @@ footer{margin-top:34px;padding-top:16px;border-top:1px solid var(--grid);font-si
   <div class="btnrow" style="margin-top:16px">
     <button class="btn" id="discoverBtn" type="button">Find sitemaps and sample URLs</button>
     <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
+    <button class="btn ghost sm hidden" id="stopDiscover" type="button">Stop searching</button>
   </div>
   <div id="setupErr"></div>
 </section>
@@ -436,7 +442,7 @@ const uniq = a => Array.from(new Set(a));
 })();
 
 /* persisted fields */
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#gclient','#clientName','#reportDate','#repeats'];
+const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#gclient','#clientName','#reportDate','#repeats'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -679,6 +685,12 @@ async function discover(origin, opts, log){
   const found = [];
   const seenSitemaps = new Set();
   const roots = [];
+  /* Wall-clock ceiling. Whatever else goes wrong, discovery for one site ends
+     here and the run continues with whatever was collected. Waiting longer for
+     a proxy that has not answered has never once produced a better answer. */
+  const deadline = Date.now() + (opts.budgetMs || 90000);
+  const outOfTime = () => Date.now() > deadline;
+  const left = () => Math.max(4000, deadline - Date.now());
 
   const tp = await probeTransport(origin, opts.allowProxy, log);
   if(!tp) return { urls: [], sitemaps: [], ok: false, noTransport: true, rootsFound: 0, childFailures: [] };
@@ -728,20 +740,39 @@ async function discover(origin, opts, log){
   const failed = [];
   let depth = 0;
   while(queue.length && walked.length < opts.maxChild && depth < 5){
+    if(state.cancel){ queue.forEach(x => failed.push(x)); break; }
+    if(outOfTime()){
+      logLine(log, '  stopping the walk: ' + Math.round((opts.budgetMs || 90000) / 1000) +
+        's budget reached with ' + queue.length + ' sitemaps unread', 'bad');
+      queue.forEach(x => failed.push(x));
+      break;
+    }
     depth++;
     const batch = queue.filter(u => !seenSitemaps.has(u)).slice(0, opts.maxChild - walked.length);
     batch.forEach(u => seenSitemaps.add(u));
     queue = [];
+    if(batch.length > 2) logLine(log, '  fetching ' + batch.length + ' child sitemaps, ' +
+      (proxied() ? '2' : '5') + ' at a time…', 'dim');
     const parsedBatch = await mapLimit(batch, proxied() ? 2 : 5, async sm => {
+      /* The deadline has to be checked per item, not per depth level: a single
+         index can hand back twelve children as one batch, and checking only at
+         the top of the loop let all twelve run past the budget. */
+      if(state.cancel || outOfTime()) return { sm, err: 'budget reached' };
       if(/\.gz$/i.test(sm)) return { sm, skip:'gzip' };
       try{
-        const r = await fetchText(sm, { tries: 1 });
+        const r = await fetchText(sm, { timeout: Math.min(18000, left()), tries: 1 });
         return { sm, parsed: parseSitemap(r.text, sm) };
       }catch(e){ return { sm, err: e.message }; }
     });
+    const skipped = parsedBatch.filter(b => b.err === 'budget reached').length;
+    if(skipped) logLine(log, '  ' + skipped + ' sitemap' + (skipped > 1 ? 's' : '') +
+      ' not attempted: the ' + Math.round((opts.budgetMs || 90000) / 1000) + 's budget for this site ran out', 'bad');
     for(const b of parsedBatch){
       if(b.skip){ logLine(log, '  skip  ' + shortSm(b.sm) + ' (' + b.skip + ', browsers cannot decompress it)', 'dim'); continue; }
-      if(b.err){ logLine(log, '  fail  ' + shortSm(b.sm) + ' (' + b.err + ')', 'bad'); failed.push(b.sm); continue; }
+      if(b.err){
+        if(b.err !== 'budget reached') logLine(log, '  fail  ' + shortSm(b.sm) + ' (' + b.err + ')', 'bad');
+        failed.push(b.sm); continue;
+      }
       walked.push(b.sm);
       const parsed = b.parsed;
       if(parsed.children.length){
@@ -761,29 +792,28 @@ async function discover(origin, opts, log){
   /* A child that timed out is slow, not missing. Retry the failures one at a
      time with a wide window before writing them off, because a batch of them
      usually means the proxy was saturated rather than the files being absent. */
-  if(failed.length){
-    const SWEEP_CAP = 8;   // a dead host must not hang the run indefinitely
+  if(failed.length && !outOfTime()){
+    const SWEEP_CAP = 4;
     const sweep = failed.slice(0, SWEEP_CAP);
-    logLine(log, '  retrying ' + sweep.length + ' timed-out sitemap' + (sweep.length > 1 ? 's' : '') +
-      ' one at a time' + (failed.length > SWEEP_CAP ? ', ' + (failed.length - SWEEP_CAP) + ' left unretried' : '') + '…', 'dim');
+    const alts = PROXIES.filter(pr => pr !== transport && pr.name !== 'direct');
+    logLine(log, '  retrying ' + sweep.length + ' failed sitemap' + (sweep.length > 1 ? 's' : '') +
+      ' through a different proxy' + (failed.length > SWEEP_CAP ? ', ' + (failed.length - SWEEP_CAP) + ' left' : '') + '…', 'dim');
     const stillFailed = failed.slice(SWEEP_CAP);
     for(const sm of sweep){
-      if(state.cancel) break;
-      try{
-        const r = await fetchText(sm, { timeout: 45000, tries: 1 });
-        const parsed = parseSitemap(r.text, sm);
-        if(parsed.urls.length){
-          walked.push(sm);
-          parsed.urls.forEach(u => found.push({ loc: u.loc, lastmod: u.lastmod || null, source: sm }));
-          logLine(log, '  recovered ' + shortSm(sm) + ' -> ' + parsed.urls.length + ' URLs', 'ok');
-        } else if(parsed.children.length){
-          logLine(log, '  recovered ' + shortSm(sm) + ' (index, ' + parsed.children.length + ' children, not followed on retry)', 'dim');
-          stillFailed.push(sm);
-        } else { stillFailed.push(sm); }
-      }catch(e){
-        stillFailed.push(sm);
-        logLine(log, '  still failing ' + shortSm(sm) + ' (' + e.message + ')', 'bad');
+      if(state.cancel || outOfTime()){ stillFailed.push(sm); continue; }
+      let got = null;
+      for(const pr of alts.slice(0, 2)){
+        if(outOfTime()) break;
+        const r = await rawFetch(pr.url(sm), Math.min(15000, left()));
+        if(r.ok && r.text && r.text.length > 8){ got = { text: r.text, via: pr.name }; break; }
       }
+      if(!got){ stillFailed.push(sm); logLine(log, '  still failing ' + shortSm(sm), 'bad'); continue; }
+      const parsed = parseSitemap(got.text, sm);
+      if(parsed.urls.length){
+        walked.push(sm);
+        parsed.urls.forEach(u => found.push({ loc: u.loc, lastmod: u.lastmod || null, source: sm }));
+        logLine(log, '  recovered ' + shortSm(sm) + ' via ' + got.via + ' -> ' + parsed.urls.length + ' URLs', 'ok');
+      } else { stillFailed.push(sm); }
     }
     failed.length = 0;
     stillFailed.forEach(x => failed.push(x));
@@ -5563,12 +5593,15 @@ function renumberSites(){
 /* --- discovery ----------------------------------------------------------- */
 async function discoverAll(origins){
   const btn = $('#discoverBtn'); btn.disabled = true; btn.textContent = 'Searching…';
+  state.cancel = false;
+  $('#stopDiscover').classList.remove('hidden');
   $('#discCard').classList.remove('hidden');
   $('#selCard').classList.add('hidden'); $('#resCard').classList.add('hidden');
   const log = $('#discLog'); log.innerHTML = '';
   $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
 
-  const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30) };
+  const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30),
+                 budgetMs: clampInt($('#budget') ? $('#budget').value : 90, 20, 600, 90) * 1000 };
   const sites = [];
   const notes = [];
 
@@ -5594,8 +5627,10 @@ async function discoverAll(origins){
       if(res && res.noTransport){
         why = 'could not be reached from the browser: it blocks cross-origin requests and no proxy could fetch it either';
       } else if(res && res.rootsFound && (res.childFailures || []).length){
-        why = 'published a sitemap, but ' + res.childFailures.length + ' of its child sitemaps timed out even on retry. ' +
-              'The sitemap exists; the proxy could not fetch it in time. Try again, or paste URLs into the manual list';
+        why = 'published a sitemap, but none of its ' + res.childFailures.length +
+              ' child sitemaps could be fetched within the ' + Math.round((opts.budgetMs || 90000) / 1000) +
+              's budget. The sitemap exists and the proxy is the bottleneck, not the site. ' +
+              'Raise the discovery budget, turn off proxies if the site allows direct access, or paste URLs into the manual list';
       } else if(res && res.rootsFound){
         why = 'published a sitemap, but no URLs could be read from it. It may be empty, gzipped, or in a format this cannot parse';
       } else {
@@ -5624,6 +5659,8 @@ async function discoverAll(origins){
   }
 
   btn.disabled = false; btn.textContent = 'Find sitemaps and sample URLs';
+  $('#stopDiscover').classList.add('hidden');
+  state.cancel = false;
 
   if(!sites.length){
     $('#discStat').textContent = 'no URLs';
@@ -5659,6 +5696,12 @@ $('#discoverBtn').addEventListener('click', () => {
   siteInputs().forEach((inp, i) => { if(origins[i]) inp.value = origins[i]; });
   saveSites();
   discoverAll(origins);
+});
+
+$('#stopDiscover').addEventListener('click', () => {
+  state.cancel = true;
+  $('#stopDiscover').disabled = true;
+  logLine($('#discLog'), 'Stopping. Whatever has been read so far will be used.', 'bad');
 });
 
 $('#manualOnlyBtn').addEventListener('click', () => {
