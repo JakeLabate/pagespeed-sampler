@@ -47,7 +47,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 
 <div class="toc"><p class="h">On this page</p><ol><li><a href="#phase-0-instant">Phase 0 &middot; Instant read</a></li><li><a href="#phase-1-discover">Phase 1 · Discover</a></li><li><a href="#phase-2-shape">Phase 2 · Shape</a></li><li><a href="#phase-3-sample">Phase 3 · Sample</a></li><li><a href="#phase-4-measure">Phase 4 · Measure</a></li><li><a href="#phase-5-interpret">Phase 5 · Interpret</a></li><li><a href="#phase-6-deliver">Phase 6 · Deliver</a></li><li><a href="#what-this-does-not-do">What this does not do</a></li></ol></div>
 <figure>
-<svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to a dedicated proxy to public proxies to twenty-two common sitemap paths. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
+<svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. An instant read from the Chrome UX Report runs before all of them and is not shown here. Discovery falls back from a direct fetch to a dedicated proxy to public proxies to twenty-two common sitemap paths. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
@@ -171,33 +171,11 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 <p>The probe winner starts as the only proxy in the rotation. An alternate joins it by actually answering, and <b>three failures drops it</b> for the rest of that site. Sitemap concurrency then follows how many proxies are genuinely working, at 3 requests per working proxy: spreading load helps only while they all work, and rotating onto one that is stalling just moves the stall around.</p>
 <p>Proxy latency and failure rates are scored, shared across every site in the run, and kept in <code>localStorage</code> between runs, so the ordering starts from whatever was actually fast last time instead of relearning it each run.</p>
 
-<h3><span class="n">1.1c</span>Your own proxy</h3>
+<h3><span class="n">1.1c</span>This deployment&rsquo;s own backend</h3>
 <p>The public proxies share datacentre address ranges, and a site behind a WAF blocks those ranges wholesale. The proxy connects, the site answers 403, and no amount of retrying changes it. This is the one discovery failure a browser-only tool cannot engineer around, because the block is on the address, not on the request.</p>
-<p>A proxy on a known address is the way out, and it is also better for privacy: the audited URLs go to a server this deployment runs rather than to a stranger&rsquo;s. This build ships one, a Cloudflare Worker, configured in the source rather than typed into a field. It is tried straight after direct fetch, ahead of the public pool, and it works even with public proxies switched off. Fork the app and the Worker below is what you deploy in its place.</p>
-<p id="your-own-proxy">A Cloudflare Worker is the quickest one to stand up. Create a Worker, paste this, deploy, and use <code>https://&lt;your-worker&gt;.workers.dev/?url={url}</code>:</p>
-<div class="scroller"><pre><code>export default {
-  async fetch(request) {
-    const target = new URL(request.url).searchParams.get('url');
-    if (!target) return new Response('missing url', { status: 400 });
-
-    // Only proxy for your own page, and only plain GETs.
-    const cors = {
-      'Access-Control-Allow-Origin': 'https://pagespeed.jakelabate.com',
-      'Access-Control-Allow-Methods': 'GET, OPTIONS'
-    };
-    if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    if (request.method !== 'GET') return new Response('GET only', { status: 405 });
-
-    const upstream = await fetch(target, {
-      headers: { 'User-Agent': 'PageSpeedSampler/1.0 (+sitemap reader)' },
-      redirect: 'follow'
-    });
-    return new Response(upstream.body, {
-      status: upstream.status,
-      headers: { ...cors, 'Content-Type': upstream.headers.get('content-type') || 'text/plain' }
-    });
-  }
-};</code></pre></div>
+<p>A proxy on a known address is the way out, and it is also better for privacy: the audited URLs go to a server this deployment runs rather than to a stranger&rsquo;s. This build ships one, a Cloudflare Worker, configured in the source rather than typed into a field. It is tried straight after direct fetch and ahead of the public pool.</p>
+<p>The same Worker does a second, larger job: it holds the API keys, so a visitor does not need a Google Cloud project to use this at all. That side of it is described in <a href="#phase-4-measure">phase 4</a>.</p>
+<div class="note"><b>Fork this and you deploy your own.</b> The Worker&rsquo;s source, its tests and its deploy steps are in <code>worker/</code> in the repository. Set <code>CONFIG.apiBase</code> to <code>''</code> and the hosted allowance turns off, leaving every visitor to bring their own key.</div>
 <div class="note"><b>Leave the allow-origin locked to your own page.</b> A worker that answers <code>*</code> is an open proxy anyone can point at anything, and it will be found.</div>
 
 <h3><span class="n">1.2</span>Find the sitemap</h3>
@@ -248,6 +226,11 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 
 <h2 id="phase-4-measure">Phase 4 · Measure<a class="anchor" href="#phase-4-measure" aria-label="Link to this section">#</a></h2>
 <div class="phase">
+
+<h3><span class="n">4.0</span>Decide whose quota this spends</h3>
+<p>A key in the field wins: the browser calls Google directly, spends the visitor&rsquo;s own quota, and the backend is not involved. With the field empty, the run claims its whole call count from a daily per-visitor allowance up front, gets a signed short-lived token, and makes every call through the backend, which adds a key it never reveals.</p>
+<p>Reserving up front rather than counting each call is what makes the metering affordable, at one write per sweep instead of one per call, and it means a visitor who does not have enough allowance left is told before anything is measured rather than halfway through. When it runs out the run stops having spent nothing and offers the key field as the way to continue now.</p>
+<p>The backend also caches results for six hours, keyed without the API key, so every visitor shares one cache. A page someone else already measured costs nothing to measure again, which is worth more to capacity than raising the cap would be.</p>
 
 <h3><span class="n">4.1</span>Build the job list</h3>
 <p>One job per selected URL per strategy. 100 URLs across mobile and desktop is 200 jobs.</p>

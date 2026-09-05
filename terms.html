@@ -28,7 +28,7 @@
 <p class="updated">Last updated 3 September 2026</p>
 </div>
 
-<div class="toc"><p class="h">On this page</p><ol><li><a href="#what-this-is">What this is</a></li><li><a href="#your-credentials-your-quota">Your credentials, your quota</a></li><li><a href="#acceptable-use">Acceptable use</a></li><li><a href="#no-warranty">No warranty</a></li><li><a href="#limitation-of-liability">Limitation of liability</a></li><li><a href="#availability">Availability</a></li><li><a href="#licence">Licence</a></li><li><a href="#contact">Contact</a></li></ol></div>
+<div class="toc"><p class="h">On this page</p><ol><li><a href="#what-this-is">What this is</a></li><li><a href="#the-free-allowance">The free allowance</a></li><li><a href="#your-credentials-your-quota">Your own credentials</a></li><li><a href="#acceptable-use">Acceptable use</a></li><li><a href="#no-warranty">No warranty</a></li><li><a href="#limitation-of-liability">Limitation of liability</a></li><li><a href="#availability">Availability</a></li><li><a href="#licence">Licence</a></li><li><a href="#contact">Contact</a></li></ol></div>
 <div class="callout">
 <p class="tag">The short version</p>
 <p>A free tool, provided as is, that you run in your own browser using your own Google API credentials. Use it on sites you are entitled to test. It comes with no warranty.</p>
@@ -37,14 +37,22 @@
 <h2 id="what-this-is">What this is<a class="anchor" href="#what-this-is" aria-label="Link to this section">#</a></h2>
 <p>PageSpeed Sampler is a free, open-source utility published by Jake Labate, SEO Consultant. It discovers a site's sitemap, samples a set of URLs, measures them with the Google PageSpeed Insights API, and reports the results. There is no account and no subscription. The interface runs entirely in your browser. A small backend, described in the <a href="privacy.html#the-backend">privacy notice</a>, makes the measurement calls for you when you have not supplied your own API key, so that you do not need a Google Cloud account; supply a key and it is bypassed.</p>
 
-<h2 id="your-credentials-your-quota">Your credentials, your quota<a class="anchor" href="#your-credentials-your-quota" aria-label="Link to this section">#</a></h2>
-<p>The tool uses your own Google PageSpeed Insights API key and, optionally, your own Google OAuth client. All API usage counts against your quota and is subject to Google's own terms. You are responsible for keeping your credentials secure and for any usage incurred under them.</p>
+<h2 id="the-free-allowance">The free allowance<a class="anchor" href="#the-free-allowance" aria-label="Link to this section">#</a></h2>
+<p>If you do not supply an API key, measurements are made using keys belonging to Jake Labate, and the Google quota they spend is his. This is a courtesy, not a service being sold to you, and it comes with no commitment attached.</p>
+<ul>
+<li>There is a daily cap per visitor. When it is reached the tool says so and invites you to supply your own key, which has no such cap.</li>
+<li>The allowance may be reduced, paused or withdrawn at any time, without notice, for any reason, including because the shared quota has been exhausted by other visitors.</li>
+<li>Do not automate against it, script it, or attempt to evade the cap. It is metered per visitor precisely so that one person cannot take it from everyone else.</li>
+</ul>
+
+<h2 id="your-credentials-your-quota">Your own credentials<a class="anchor" href="#your-credentials-your-quota" aria-label="Link to this section">#</a></h2>
+<p>You may supply your own Google PageSpeed Insights API key, and optionally your own Google OAuth client for the Sheets export. When you do, your browser talks to Google directly, the free allowance and its metering are not involved, and all API usage counts against your quota and is subject to Google's own terms. You are responsible for keeping your credentials secure and for any usage incurred under them.</p>
 
 <h2 id="acceptable-use">Acceptable use<a class="anchor" href="#acceptable-use" aria-label="Link to this section">#</a></h2>
 <ul>
 <li>Measure sites you own, sites you are engaged to work on, or sites that are publicly accessible and that you have a legitimate professional reason to benchmark.</li>
 <li>Do not use the tool to place unreasonable load on any site, to circumvent access controls, or in any way that breaks the law or the terms of the sites you are measuring.</li>
-<li>Requests are made from your browser under your own network identity. What you do with the tool is attributable to you, not to its author.</li>
+<li>Sitemap requests are made from your browser under your own network identity. Measurement requests reach Google from your browser when you supply a key, and from the backend on your behalf when you do not. Either way, what you choose to measure is attributable to you, not to the tool's author.</li>
 </ul>
 
 <h2 id="no-warranty">No warranty<a class="anchor" href="#no-warranty" aria-label="Link to this section">#</a></h2>

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Privacy Policy · PageSpeed Sampler</title>
-<meta name="description" content="How PageSpeed Sampler handles data. It runs entirely in your browser and has no server.">
+<meta name="description" content="How PageSpeed Sampler handles data. The interface runs in your browser; a metered backend makes the measurement calls unless you supply your own API key.">
 <link rel="stylesheet" href="shared.css">
 </head>
 <body>
@@ -24,21 +24,21 @@
 <div class="titleblock">
 <p class="eyebrow">PageSpeed Sampler</p>
 <h1>Privacy Policy</h1>
-<p class="lead">A single HTML page with no server, no database and no analytics. Everything it does happens in your own browser.</p>
+<p class="lead">A single HTML page with no account, no database of users and no analytics. The one piece of infrastructure is a metered backend that makes the measurement calls, so that using this does not require a Google Cloud account.</p>
 <p class="updated">Last updated 3 September 2026</p>
 </div>
 
 <div class="toc"><p class="h">On this page</p><ol><li><a href="#who-this-covers">Who this covers</a></li><li><a href="#what-is-stored-and-where">What is stored, and where</a></li><li><a href="#what-is-sent-and-to-whom">What is sent, and to whom</a></li><li><a href="#the-backend">What the backend sees</a></li><li><a href="#google-account-access">Google account access</a></li><li><a href="#analytics-and-tracking">Analytics and tracking</a></li><li><a href="#hosting">Hosting</a></li><li><a href="#children">Children</a></li><li><a href="#changes">Changes</a></li><li><a href="#contact">Contact</a></li></ol></div>
 <div class="callout">
 <p class="tag">The short version</p>
-<p>PageSpeed Sampler is a single HTML page with no server and no database. Everything it does happens in your own browser. Nothing you type into it is transmitted to, stored by, or visible to Jake Labate or anyone else operating this tool, because there is nothing operating it. It is a static file.</p>
+<p>PageSpeed Sampler is a single HTML page. There is no account, no sign-in and no analytics, and your settings never leave your browser. One thing does leave: the URLs you ask to measure, because a backend has to pass them to Google on your behalf so that you do not need a Google Cloud account of your own. It also sees a salted hash of your IP address, used only to count a daily allowance. It never sees your name, your email or a history of what you looked at, and if you supply your own API key it is not involved at all.</p>
 </div>
 
 <h2 id="who-this-covers">Who this covers<a class="anchor" href="#who-this-covers" aria-label="Link to this section">#</a></h2>
 <p>This policy applies to PageSpeed Sampler, published at <a href="https://pagespeed.jakelabate.com/">pagespeed.jakelabate.com</a> and maintained by Jake Labate, SEO Consultant.</p>
 
 <h2 id="what-is-stored-and-where">What is stored, and where<a class="anchor" href="#what-is-stored-and-where" aria-label="Link to this section">#</a></h2>
-<p>The tool saves your settings in your browser's <code>localStorage</code> so you do not have to retype them. That includes the names and URLs of the sites you enter, your PageSpeed Insights API key, and your sampling preferences.</p>
+<p>The tool saves your settings in your browser's <code>localStorage</code> so you do not have to retype them. That includes the names and URLs of the sites you enter, your sampling preferences, and your PageSpeed Insights API key if you chose to supply one. The key field is optional and empty by default.</p>
 <p>This data never leaves your browser. It is not synced, not backed up, and not readable by anyone else. Clearing your browser's site data for this domain deletes all of it.</p>
 
 <h2 id="what-is-sent-and-to-whom">What is sent, and to whom<a class="anchor" href="#what-is-sent-and-to-whom" aria-label="Link to this section">#</a></h2>
@@ -47,7 +47,7 @@
 <li><strong>Chrome UX Report API.</strong> The instant read sends each origin you enter to <code>chromeuxreport.googleapis.com</code>, with your API key if you supplied one and otherwise through the backend below, and gets back that origin&rsquo;s real-user Core Web Vitals. It is a lookup of data Google already holds; nothing about your visit is added to it.</li>
 <li><strong>Google PageSpeed Insights API.</strong> Each URL you choose to measure is sent to <code>pagespeedonline.googleapis.com</code>, along with your API key if you supplied one. This is how the measurement happens. Google's handling of those requests is governed by the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a>.</li>
 <li><strong>The sites you measure.</strong> To find a sitemap, the tool requests <code>robots.txt</code> and common sitemap paths from the sites you enter, directly from your browser.</li>
-<li><strong>Public CORS proxies.</strong> Most sites do not allow a browser to read their sitemap cross-origin. When a direct request is blocked, the tool retries through a public proxy so it can read the file. The proxies it may use are allorigins, codetabs, corsproxy.io, isomorphic-git and thingproxy. Only the public sitemap URL is passed to them; your API key and your settings are never sent to a proxy. You can switch this off with the <em>Allow public CORS proxies</em> checkbox, in which case only sites that permit direct access will be discoverable.</li>
+<li><strong>Public CORS proxies.</strong> Most sites do not allow a browser to read their sitemap cross-origin. When a direct request is blocked, the tool retries through a public proxy so it can read the file. The proxies it may use are allorigins, codetabs, corsproxy.io, isomorphic-git and thingproxy. Only the public sitemap URL is passed to them; your API key and your settings are never sent to a proxy.</li>
 <li><strong>This deployment&rsquo;s own backend.</strong> A Cloudflare Worker run by Jake Labate does two jobs. It fetches sitemaps, ahead of any public proxy, because sites behind a WAF block the public ones by address. And, when you have not supplied your own API key, it makes the PageSpeed and Chrome UX Report calls for you using keys it holds, so the tool is usable without a Google Cloud account. What it receives is set out in the next section. Your own API key, if you enter one, is never sent to it: the backend is bypassed entirely and your browser talks to Google directly.</li>
 <li><strong>Google Sheets and Drive.</strong> Only if you choose to create a Google Sheet. See the next section.</li>
 </ul>

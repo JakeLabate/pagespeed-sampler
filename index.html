@@ -443,7 +443,7 @@ footer .by{margin-left:auto}
 </section>
 
 <footer>
-  <p class="cap">Front end only. Nothing is sent anywhere except Google's PageSpeed Insights API and, if a site blocks direct sitemap access, a public CORS proxy.</p>
+  <p class="cap">The interface and all of the analysis run in your browser. Measurements come from Google's PageSpeed Insights API, reached through this site's own metered backend unless you supply your own key, in which case your browser talks to Google directly. Sitemaps are fetched directly where a site allows it and through a proxy where it does not. <a href="privacy.html#the-backend">What the backend sees</a>.</p>
   <a href="flow.html">How it works</a>
   <a href="privacy.html">Privacy</a>
   <a href="terms.html">Terms</a>
@@ -547,12 +547,11 @@ function scoreCell(metric, v){
   return '<span class="scorecell"><span class="dot g-' + g + '"></span>' + fmt(metric, v) +
          '<span class="sr" style="position:absolute;left:-9999px">' + GRADE_LABEL[g] + '</span></span>';
 }
-/* Median by default. A mean lets one catastrophic page decide which collection
-   is named weakest, which is the wrong claim to put in front of a client. Both
-   are available and every figure is labelled with which was used. */
-/* Site figures are the mean. It was a field, and a report that can be regenerated
-   with a different definition of its own headline number is a report whose
-   headline number means nothing on its own. */
+/* Site figures are the mean, always. This was a field once, and a report that can
+   be regenerated with a different definition of its own headline number is a
+   report whose headline number means nothing on its own. A mean does let one
+   catastrophic page pull a collection down, which is why the spread is reported
+   alongside it rather than hidden behind a different average. */
 const CENTRAL = { mode: 'mean' };
 
 /* Discovery runs until it has the inventory, not until a stopwatch says stop.

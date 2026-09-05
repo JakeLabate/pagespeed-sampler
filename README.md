@@ -5,6 +5,10 @@ set of URLs across its collection types, measures each one with the Google PageS
 Insights API, and reports the averages. Add up to four sites and it benchmarks them
 against each other.
 
+**Free to use, no API key needed.** A small Cloudflare Worker holds the keys and
+meters a daily allowance per visitor, so nobody needs a Google Cloud account. Supply
+your own key to go past the allowance and the backend is bypassed entirely.
+
 **Live: https://pagespeed.jakelabate.com/**
 **Full pipeline: https://pagespeed.jakelabate.com/flow.html**
 
@@ -659,19 +663,18 @@ There is no checkbox. A site that blocks direct browser access cannot be read an
 way, so refusing to try only produced an empty inventory and a question the operator had
 no basis to answer. Direct fetch is still tried first on every site.
 
-### Your own proxy
+### This deployment's own backend
 
 The one discovery failure that cannot be engineered around is a WAF blocking the public
 proxies by address. This build ships its own Cloudflare Worker, set as
 `CONFIG.proxyTemplate` in the source. It is tried straight after direct fetch, ahead of
-the public pool, works with public proxies switched off, and sends the audited URLs to a
-server this deployment runs rather than a stranger's.
+the public pool, and sends the audited URLs to a server this deployment runs rather than
+a stranger's. The same Worker holds the API keys, which is what makes the tool usable
+without a Google Cloud account.
 
-Forking: the Worker code is on the
-[How it works page](https://pagespeed.jakelabate.com/flow.html#your-own-proxy) and takes
-about a minute to stand up. Point `CONFIG.proxyTemplate` at it, using `{url}` where the
-encoded target goes or `{raw}` for an unencoded one. Lock its allow-origin to your own
-page rather than `*`, or you have deployed an open proxy.
+Forking: the Worker's source, its test suite and its deploy steps are in `worker/`.
+Point `CONFIG.proxyTemplate` and `CONFIG.apiBase` at your own deployment. Lock its
+allow-origin to your own page rather than `*`, or you have deployed an open proxy.
 
 Two things a browser-only tool cannot get around without one:
 
@@ -683,33 +686,35 @@ Two things a browser-only tool cannot get around without one:
   404 on `robots.txt` no longer reads as "unreachable", and the 22 known sitemap paths are
   still tried.
 
-In either case, paste that site's URLs into the manual field under **Sampling and run
-options** and run again. The list applies **per site**: each site keeps only the pasted
-URLs on its own host, so one blocked competitor does not cost you the comparison.
-Grouping, sampling and measurement all work the same way on a pasted list.
+In either case the run reports the site with no pages found rather than failing, and the
+other sites in the comparison are unaffected.
 
-Proxies can be disabled entirely with the "Allow public CORS proxies" checkbox.
 
 ## Running it
 
-The setup screen offers two entry points. **Find pages and run** goes from URLs to
-finished results without stopping. **Find sitemaps only** stops after sampling so you can
-edit the selection and the page equivalents first, then press **Measure the selected
-pages**. The measure button belongs to a sample, so it does not exist until there is one.
+Enter a site. You do not need an API key.
+
+The setup screen offers three entry points. **Instant read** returns the Core Web Vitals
+verdict and its own deliverables in about a second, from field data, without measuring
+anything. **Find pages and run** goes from URLs to finished results without stopping.
+**Find sitemaps only** stops after sampling so you can edit the selection and the page
+equivalents first, then press **Measure the selected pages**. The measure button belongs
+to a sample, so it does not exist until there is one.
 
 It is one HTML file with no build step and no dependencies. Open `index.html` directly,
-or serve the folder with anything.
+or serve the folder with anything. Runs need either the backend in `worker/` deployed and
+`CONFIG.apiBase` pointed at it, or an API key typed into the field.
 
 ## Configuration
 
-Five settings are fixed in `CONFIG` at the top of the script rather than exposed as
-fields, because each was a property of the deployment that the operator had already
-decided and then had to keep re-deciding:
+These settings are fixed in `CONFIG` at the top of the script rather than exposed as
+fields, because each is a property of the deployment rather than of a run:
 
 | Setting | Value |
 |---|---|
 | `googleClientId` | The OAuth client for the Sheets export |
 | `proxyTemplate` | The Worker used ahead of the public proxy pool |
+| `apiBase` | The same Worker, holding the API keys. Set to `''` to turn the free allowance off and require every visitor to bring a key |
 | `strategies` | Always `mobile` and `desktop` |
 | `categories` | Always SEO, accessibility and best practices, alongside performance |
 | `CENTRAL.mode` | Always the mean. A report whose headline number can be regenerated under a different definition has no headline number |
