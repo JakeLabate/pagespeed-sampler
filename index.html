@@ -194,24 +194,25 @@ tbody tr:hover{background:var(--surface-2)}
 .note{background:var(--surface-2);border:1px solid var(--grid);border-radius:9px;padding:10px 12px;font-size:12.5px;color:var(--ink-2);margin-top:12px}
 .hidden{display:none !important}
 .grouphd{font-weight:640;font-size:13px}
-.siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:7px 9px;border-radius:10px;
-  border:1px solid transparent;background:var(--surface-2)}
-.siterow.is-primary{background:var(--surface);border-color:var(--accent);
-  box-shadow:inset 3px 0 0 var(--accent)}
-.siterow.is-competitor{margin-left:18px;background:transparent;border-color:var(--grid);border-style:dashed}
-.siterow.is-competitor .num{color:var(--muted)}
-.sitegap{display:flex;align-items:center;gap:9px;margin:12px 0 7px;
-  font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.1em;
-  text-transform:uppercase;color:var(--muted)}
-.sitegap:after{content:"";flex:1;height:1px;background:var(--grid)}
-.siterow input.name{flex:0 1 150px;min-width:0}
+.siterow{margin-bottom:8px;border-radius:10px;border:1px solid var(--ring);
+  background:var(--surface-2);overflow:hidden}
+.siterow.is-primary{border-color:var(--accent)}
+/* The role is stated inside each card rather than by a heading above a group,
+   so every site sits at the same indentation and says for itself what it is. */
+.siterow .rolebar{display:flex;align-items:center;gap:8px;padding:5px 10px;
+  background:var(--surface-3);border-bottom:1px solid var(--ring)}
+.siterow .role{font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.siterow.is-primary .rolebar{background:color-mix(in srgb,var(--accent) 20%,transparent);
+  border-bottom-color:color-mix(in srgb,var(--accent) 34%,transparent)}
+.siterow.is-primary .role{color:var(--accent);font-weight:700}
+.siterow .sitefields{display:flex;gap:8px;align-items:center;padding:9px 10px}
+.siterow input.name{flex:0 1 170px;min-width:0}
 .siterow input.url{flex:1 1 220px;min-width:0}
-@media(max-width:620px){.siterow{flex-wrap:wrap}.siterow input.name,.siterow input.url{flex:1 1 100%}}
-.siterow .num{width:20px;flex:none;font-size:11px;font-weight:700;color:var(--muted);text-align:center}
-.siterow .role{flex:none;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.08em;
-  text-transform:uppercase;color:var(--muted);min-width:74px;text-align:right}
-.siterow .role.primary{color:var(--accent);font-weight:700}
-.siterow .rm{flex:none;background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:6px 8px;border-radius:7px}
+@media(max-width:620px){.siterow .sitefields{flex-wrap:wrap}
+  .siterow input.name,.siterow input.url{flex:1 1 100%}}
+.siterow .rm{margin-left:auto;flex:none;background:none;border:0;color:var(--muted);cursor:pointer;
+  font-size:15px;line-height:1;padding:2px 6px;border-radius:6px}
 .siterow .rm:hover{background:var(--surface-2);color:var(--critical-ink)}
 .site-hd{padding:11px 12px;background:var(--surface-3);font-size:13px;display:flex;align-items:center;gap:8px;
   border-bottom:1px solid var(--grid);position:sticky;top:0;z-index:2}
@@ -316,7 +317,6 @@ footer .by{margin-left:auto}
   <div class="hd"><span class="step">1</span><h2 class="grow">Setup</h2></div>
   <div class="row c2">
     <div>
-      <label class="f">Sites</label>
       <div id="siteList"></div>
       <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
     </div>
@@ -6677,7 +6677,7 @@ function addSiteRow(value, name){
   if(list.children.length >= MAX_SITES) return;
   const first = list.children.length === 0;
   const row = el('div','siterow');
-  const n = el('span','num', String(list.children.length + 1));
+  const bar = el('div','rolebar');
   const role = el('span','role','');
   const nameInp = document.createElement('input');
   nameInp.type = 'text'; nameInp.className = 'name'; nameInp.spellcheck = false;
@@ -6693,33 +6693,24 @@ function addSiteRow(value, name){
   inp.addEventListener('change', saveSites);
   const rm = el('button','rm','\u00d7');
   rm.type = 'button'; rm.title = 'Remove this site';
-  rm.addEventListener('click', () => { row.remove(); renumberSites(); saveSites(); });
-  row.appendChild(n); row.appendChild(nameInp); row.appendChild(inp);
-  row.appendChild(role); row.appendChild(rm);
+  rm.addEventListener('click', () => { row.remove(); refreshSiteRoles(); saveSites(); });
+  const fields = el('div','sitefields');
+  bar.appendChild(role); bar.appendChild(rm);
+  fields.appendChild(nameInp); fields.appendChild(inp);
+  row.appendChild(bar); row.appendChild(fields);
   list.appendChild(row);
-  renumberSites();
+  refreshSiteRoles();
 }
-function renumberSites(){
+function refreshSiteRoles(){
   const rows = siteRows();
   /* "First in the list" is not a label. The report is about this site and the
-     others exist to be measured against it, so the row says which is which.
-     The primary row has no remove button: a run needs a site to be about. */
-  const solo = rows.length < 2;
-  /* A divider and an indent, so the competitors read as a group measured
-     against the first row rather than as three peers in a list. */
-  Array.from(document.querySelectorAll('#siteList .sitegap')).forEach(n => n.remove());
+     others exist to be measured against it, so each card says which it is
+     rather than relying on a heading above a group or on its position.
+     The primary card has no remove button: a run needs a site to be about. */
   rows.forEach((r, i) => {
-    r.querySelector('.num').textContent = String(i + 1);
-    r.className = 'siterow' + (solo ? '' : (i === 0 ? ' is-primary' : ' is-competitor'));
-    if(i === 1 && !solo){
-      const gap = el('div','sitegap','Measured against');
-      r.parentNode.insertBefore(gap, r);
-    }
+    r.className = 'siterow' + (i === 0 ? ' is-primary' : ' is-competitor');
     const role = r.querySelector('.role');
-    if(role){
-      role.textContent = solo ? '' : (i === 0 ? 'Primary' : 'Competitor');
-      role.className = 'role' + (i === 0 ? ' primary' : '');
-    }
+    if(role) role.textContent = i === 0 ? 'Primary' : 'Competitor';
     const rm = r.querySelector('.rm');
     rm.style.visibility = i === 0 ? 'hidden' : 'visible';
     rm.disabled = i === 0;
