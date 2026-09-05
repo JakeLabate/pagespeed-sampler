@@ -559,6 +559,11 @@ Proxies can be disabled entirely with the "Allow public CORS proxies" checkbox.
 
 ## Running it
 
+The setup screen offers two entry points. **Find pages and run** goes from URLs to
+finished results without stopping. **Find sitemaps only** stops after sampling so you can
+edit the selection and the page equivalents first, then press **Measure the selected
+pages**. The measure button belongs to a sample, so it does not exist until there is one.
+
 It is one HTML file with no build step and no dependencies. Open `index.html` directly,
 or serve the folder with anything.
 

@@ -374,7 +374,7 @@ footer .by{margin-left:auto}
   </details>
 
   <div class="btnrow" style="margin-top:16px">
-    <button class="btn" id="sweepBtn" type="button">Run the whole sweep</button>
+    <button class="btn" id="sweepBtn" type="button">Find pages and run</button>
     <button class="btn ghost sm" id="discoverBtn" type="button">Find sitemaps only</button>
     <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
     <button class="btn ghost sm hidden" id="stopDiscover" type="button">Stop searching</button>
@@ -419,10 +419,10 @@ footer .by{margin-left:auto}
 </section>
 
 <!-- 5. RUN -->
-<section class="card" id="runCard">
+<section class="card hidden" id="runCard">
   <div class="hd"><span class="step" id="runStep">5</span><h2 class="grow">Run</h2></div>
   <div class="btnrow" style="margin-top:16px">
-    <button class="btn" id="runBtn" type="button">Run PageSpeed test</button>
+    <button class="btn" id="runBtn" type="button">Measure the selected pages</button>
     <button class="btn ghost" id="stopBtn" type="button" disabled>Stop</button>
     <span class="prognote" id="runNote"></span><span class="prognote" id="inFlight" style="color:var(--muted)"></span>
   </div>
@@ -1842,6 +1842,7 @@ function buildGroupsAndSample(){
   }
   autoMapCollections();
   $('#selCard').classList.remove('hidden');
+  $('#runCard').classList.remove('hidden');
   renderMapPanel();
   resampleForMapping();
 }
@@ -6150,7 +6151,8 @@ async function discoverAll(origins, sweepThrough){
   state.cancel = false;
   $('#stopDiscover').classList.remove('hidden');
   $('#discCard').classList.remove('hidden');
-  $('#selCard').classList.add('hidden'); $('#resCard').classList.add('hidden');
+  $('#selCard').classList.add('hidden'); $('#runCard').classList.add('hidden');
+  $('#pairCard').classList.add('hidden'); $('#resCard').classList.add('hidden');
   const log = $('#discLog'); log.innerHTML = '';
   $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
 
@@ -6274,7 +6276,7 @@ async function discoverAll(origins, sweepThrough){
     slowestSite: slowest ? { label: hostLabel(slowest.origin), ms: slowest.ms } : null };
 
   btn.disabled = false; btn.textContent = 'Find sitemaps only';
-  $('#sweepBtn').disabled = false;
+  $('#sweepBtn').disabled = false; $('#sweepBtn').textContent = 'Find pages and run';
   $('#stopDiscover').classList.add('hidden');
   state.cancel = false;
 
