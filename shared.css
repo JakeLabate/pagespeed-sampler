@@ -3,22 +3,12 @@
    thin enough that they read as three orphan documents rather than one site. */
 
 :root{
-  color-scheme:light;
-  --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ed;
-  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
-  --rule:#e1e0d9; --ring:rgba(11,11,11,.10);
-  --indigo:#191A3E; --teal:#0E8C8B; --accent:#2a78d6; --critical:#d03b3b;
-  --shadow:0 1px 2px rgba(11,11,11,.04), 0 10px 30px rgba(11,11,11,.05);
-}
-@media (prefers-color-scheme:dark){
-  :root:where(:not([data-theme="light"])){
-    color-scheme:dark;
-    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#161615;
-    --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
-    --rule:#2c2c2a; --ring:rgba(255,255,255,.10);
-    --indigo:#c8c9e8; --teal:#3fb3b2; --accent:#3987e5; --critical:#e06060;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
-  }
+  color-scheme:dark;
+  --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#161615;
+  --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
+  --rule:#2c2c2a; --ring:rgba(255,255,255,.10);
+  --indigo:#c8c9e8; --teal:#3fb3b2; --accent:#3987e5; --critical:#e06060;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
 }
 
 *{box-sizing:border-box}

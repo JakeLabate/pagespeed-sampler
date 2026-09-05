@@ -7,36 +7,14 @@
 <meta name="description" content="Discover a site's sitemap, sample up to 10 URLs per collection type, measure each with the Google PageSpeed Insights API, report averages, and benchmark up to four sites against each other.">
 <style>
 :root{
-  color-scheme: light;
-  --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ed; --surface-3:#e9e8e3;
-  --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
-  --grid:#e1e0d9; --axis:#c3c2b7; --ring:rgba(11,11,11,.10);
-  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
-  --good-ink:#006300; --critical-ink:#b02c2c;
-  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a;
-  --accent:#2a78d6; --accent-ink:#fff; --teal:#0E8C8B;
-  --shadow:0 1px 2px rgba(11,11,11,.05), 0 8px 24px rgba(11,11,11,.05);
-}
-@media (prefers-color-scheme: dark){
-  :root:where(:not([data-theme="light"])){
-    color-scheme: dark;
-    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232322; --surface-3:#2c2c2a;
-    --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
-    --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
-    --good-ink:#0ca30c; --critical-ink:#e06a6a;
-    --s1:#3987e5; --s2:#d95926; --s3:#199e70;
-    --accent:#3987e5; --teal:#3fb3b2;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
-  }
-}
-:root[data-theme="dark"]{
   color-scheme: dark;
   --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232322; --surface-3:#2c2c2a;
   --ink:#fff; --ink-2:#c3c2b7; --muted:#898781;
   --grid:#2c2c2a; --axis:#383835; --ring:rgba(255,255,255,.10);
+  --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
   --good-ink:#0ca30c; --critical-ink:#e06a6a;
   --s1:#3987e5; --s2:#d95926; --s3:#199e70;
-  --accent:#3987e5; --teal:#3fb3b2;
+  --accent:#3987e5; --accent-ink:#fff; --teal:#3fb3b2;
   --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.35);
 }
 *{box-sizing:border-box}
@@ -95,6 +73,12 @@ input[type=text],input[type=url],input[type=password],input[type=number],select,
 }
 textarea{min-height:84px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:-1px;border-color:transparent}
+@media(max-width:820px){
+  input[type=text],input[type=url],input[type=password],input[type=number],select,textarea{
+    font-size:16px;padding:10px 12px;
+  }
+  textarea{font-size:16px}
+}
 .row{display:grid;gap:12px}
 @media(min-width:720px){.row.c2{grid-template-columns:1fr 1fr}.row.c3{grid-template-columns:1fr 1fr 1fr}.row.c4{grid-template-columns:repeat(4,1fr)}}
 .hint{font-size:11.5px;color:var(--muted);margin-top:5px}
@@ -179,7 +163,16 @@ tbody tr:hover{background:var(--surface-2)}
 .note{background:var(--surface-2);border:1px solid var(--grid);border-radius:9px;padding:10px 12px;font-size:12.5px;color:var(--ink-2);margin-top:12px}
 .hidden{display:none !important}
 .grouphd{font-weight:640;font-size:13px}
-.siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+.siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px;padding:7px 9px;border-radius:10px;
+  border:1px solid transparent;background:var(--surface-2)}
+.siterow.is-primary{background:var(--surface);border-color:var(--accent);
+  box-shadow:inset 3px 0 0 var(--accent)}
+.siterow.is-competitor{margin-left:18px;background:transparent;border-color:var(--grid);border-style:dashed}
+.siterow.is-competitor .num{color:var(--muted)}
+.sitegap{display:flex;align-items:center;gap:9px;margin:12px 0 7px;
+  font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--muted)}
+.sitegap:after{content:"";flex:1;height:1px;background:var(--grid)}
 .siterow input.name{flex:0 1 150px;min-width:0}
 .siterow input.url{flex:1 1 220px;min-width:0}
 @media(max-width:620px){.siterow{flex-wrap:wrap}.siterow input.name,.siterow input.url{flex:1 1 100%}}
@@ -276,7 +269,6 @@ footer .by{margin-left:auto}
       <a href="terms.html">Terms</a>
       <a href="https://github.com/JakeLabate/pagespeed-sampler" target="_blank" rel="noopener">Source</a>
     </nav>
-    <button class="iconbtn" id="themeBtn" type="button" aria-label="Toggle theme">Theme</button>
   </div>
 </header>
 <div class="wrap">
@@ -296,12 +288,6 @@ footer .by{margin-left:auto}
       <label class="f">Sites</label>
       <div id="siteList"></div>
       <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
-      <div class="hint">A name and a URL for each site. The name is what the reports lead with, so
-        <b>jakelabate.com</b> can read as <b>Jake Labate</b>; leave it blank and the domain is used. The URL can be
-        the domain or any page on it, and the sitemap is looked up from its origin. Add up to four.
-        <b>The first site is the primary one</b>: the report is about it and every other site is measured against it
-        as a competitor. It cannot be removed, since a run needs a site to be about. To change which is primary,
-        retype them in the order you want.</div>
     </div>
     <div>
       <label class="f" for="key">PageSpeed Insights API key</label>
@@ -313,14 +299,15 @@ footer .by{margin-left:auto}
   <details class="adv">
     <summary>Sampling and run options</summary>
     <div class="body">
-      <div class="row c4">
+      <div class="row c3">
         <div>
-          <label class="f" for="perGroup">Max URLs per collection</label>
+          <label class="f" for="perGroup">Max URLs per collection, per site</label>
           <input type="number" id="perGroup" value="10" min="1" max="10">
         </div>
         <div>
-          <label class="f" for="totalCap">Max URLs total</label>
+          <label class="f" for="totalCap">Max URLs per site</label>
           <input type="number" id="totalCap" value="100" min="1" max="100">
+          <div class="hint">The ceiling applies to each site on its own, so a four-site run measures up to four times this number.</div>
         </div>
         <div>
           <label class="f" for="repeats">Runs per URL</label>
@@ -331,26 +318,6 @@ footer .by{margin-left:auto}
           </select>
           <div class="hint">A single Lighthouse run swings several points between identical executions. More runs cost proportionally more quota and give a per-page number you can defend when a client re-runs it.</div>
         </div>
-        <div>
-          <label class="f" for="budget">Discovery budget a site</label>
-          <input type="number" id="budget" value="90" min="20" max="600"> 
-          <div class="hint">Seconds. Whatever else happens, discovery for one site ends here and the run continues on whatever was collected.</div>
-        </div>
-      </div>
-      <div class="row c3" style="margin-top:12px">
-        <div>
-          <label class="f" for="centralMode">Site figures use</label>
-          <select id="centralMode">
-            <option value="median" selected>Median</option>
-            <option value="mean">Mean</option>
-          </select>
-          <div class="hint">Median by default: one catastrophic page should not decide which collection gets named the weakest. The other is always shown beside it.</div>
-        </div>
-      </div>
-      <div style="margin-top:12px">
-        <label class="f" for="clientName">Client or project name (report cover)</label>
-        <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
-        <div class="hint">Appears on the report cover and the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
       </div>
     </div>
   </details>
@@ -448,19 +415,6 @@ const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>'
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const uniq = a => Array.from(new Set(a));
 
-/* theme */
-(function themeInit(){
-  const saved = localStorage.getItem('pss.theme');
-  if(saved) document.documentElement.setAttribute('data-theme', saved);
-  $('#themeBtn').addEventListener('click', () => {
-    const cur = document.documentElement.getAttribute('data-theme');
-    const sysDark = matchMedia('(prefers-color-scheme: dark)').matches;
-    const next = cur ? (cur === 'dark' ? 'light' : 'dark') : (sysDark ? 'light' : 'dark');
-    document.documentElement.setAttribute('data-theme', next);
-    localStorage.setItem('pss.theme', next);
-  });
-})();
-
 /* persisted fields */
 /* Deployment configuration. These were fields, and every one of them was a
    decision the operator had already made and then had to keep re-making. They
@@ -486,7 +440,7 @@ function todayLocal(){
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
-const PERSIST = ['#key','#perGroup','#totalCap','#budget','#clientName','#repeats'];
+const PERSIST = ['#key','#perGroup','#totalCap','#repeats'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
@@ -540,7 +494,15 @@ function scoreCell(metric, v){
 /* Median by default. A mean lets one catastrophic page decide which collection
    is named weakest, which is the wrong claim to put in front of a client. Both
    are available and every figure is labelled with which was used. */
-const CENTRAL = { mode: 'median' };
+/* Site figures are the mean. It was a field, and a report that can be regenerated
+   with a different definition of its own headline number is a report whose
+   headline number means nothing on its own. */
+const CENTRAL = { mode: 'mean' };
+
+/* Discovery runs until it has the inventory, not until a stopwatch says stop.
+   The ceiling exists only so a sitemap index that never resolves cannot hold a
+   run open indefinitely; nothing in normal use comes near it. */
+const DISCOVERY_CEILING_MS = 6 * 60 * 1000;
 function central(a){ return CENTRAL.mode === 'mean' ? mean(a) : median(a); }
 function centralLabel(){ return CENTRAL.mode === 'mean' ? 'Mean' : 'Median'; }
 function centralWord(){ return CENTRAL.mode === 'mean' ? 'mean' : 'median'; }
@@ -3651,11 +3613,9 @@ const THEME_LIGHT = { surface:'#fcfcfb', ink:'#0b0b0b', ink2:'#52514e', muted:'#
 const THEME_DARK  = { surface:'#1a1a19', ink:'#ffffff', ink2:'#c3c2b7', muted:'#898781',
                       grid:'#2c2c2a', axis:'#383835', series: SERIES_DARK,
                       good:'#0ca30c', warn:'#fab219', bad:'#d03b3b' };
-function activeTheme(){
-  const t = document.documentElement.getAttribute('data-theme');
-  const dark = t === 'dark' || (!t && matchMedia('(prefers-color-scheme: dark)').matches);
-  return dark ? THEME_DARK : THEME_LIGHT;
-}
+/* The app is dark, always. THEME_LIGHT stays because the report and the Excel
+   workbook are printed and read on white, and their charts have to be. */
+function activeTheme(){ return THEME_DARK; }
 
 /* Normalisation is anchored to Google's thresholds, never to the range of the
    sites in the run. Min-max scaling would mean adding a competitor silently
@@ -4422,9 +4382,13 @@ function colThresholds(colKey){
   return { good: m.good / f, ni: m.ni / f, higher: !!m.higher };
 }
 
+/* The subject's own name is the client name. Asking for it twice invited the
+   two to disagree, and the one on the cover was the one nobody had checked. */
+function clientName(){
+  const subject = state.sites.find(s => s.primary) || state.sites[0];
+  return subject ? subject.label : '';
+}
 function reportTitle(){
-  const client = ($('#clientName') && $('#clientName').value.trim()) || '';
-  if(client) return 'PageSpeed audit: ' + client;
   const sites = state.sites.map(s => s.label);
   // the full list lives in the cover metadata; the title stays one line
   return 'PageSpeed audit: ' + (sites.length > 2 ? sites[0] + ' and ' + (sites.length - 1) + ' competitors'
@@ -4433,7 +4397,7 @@ function reportTitle(){
 
 /* --- the model ----------------------------------------------------------- */
 function buildReportModel(){
-  const client = ($('#clientName') && $('#clientName').value.trim()) || '';
+  const client = clientName();
   const strategies = uniq(state.results.map(r => r.strategy));
   const ok = state.results.filter(r => r.ok);
   const failed = state.results.filter(r => !r.ok);
@@ -6035,7 +5999,7 @@ function buildDeterministicReport(){
   if(!rows.length) throw new Error('No successful measurements for ' + (subject ? subject.label : strategy) + ' to report on.');
   const meta = {
     title: reportTitle(),
-    client: ($('#clientName').value || '').trim(),
+    client: clientName(),
     strategy,
     date: todayLocal(),
     perGroup: clampInt($('#perGroup').value, 1, 10, 10),
@@ -6093,7 +6057,7 @@ function originOf(raw){
 }
 /* --- the site input list ------------------------------------------------- */
 const MAX_SITES = 4;
-function siteRows(){ return Array.from(document.querySelectorAll('#siteList .siterow')); }
+function siteRows(){ return Array.from(document.querySelectorAll('#siteList > .siterow')); }
 function siteInputs(){ return Array.from(document.querySelectorAll('#siteList input.url')); }
 /* A site is a name and a URL. The name is what a client recognises; the URL is
    what gets measured. Reporting leads with the name and keeps the domain
@@ -6145,11 +6109,20 @@ function renumberSites(){
   /* "First in the list" is not a label. The report is about this site and the
      others exist to be measured against it, so the row says which is which.
      The primary row has no remove button: a run needs a site to be about. */
+  const solo = rows.length < 2;
+  /* A divider and an indent, so the competitors read as a group measured
+     against the first row rather than as three peers in a list. */
+  Array.from(document.querySelectorAll('#siteList .sitegap')).forEach(n => n.remove());
   rows.forEach((r, i) => {
     r.querySelector('.num').textContent = String(i + 1);
+    r.className = 'siterow' + (solo ? '' : (i === 0 ? ' is-primary' : ' is-competitor'));
+    if(i === 1 && !solo){
+      const gap = el('div','sitegap','Measured against');
+      r.parentNode.insertBefore(gap, r);
+    }
     const role = r.querySelector('.role');
     if(role){
-      role.textContent = rows.length < 2 ? '' : (i === 0 ? 'Primary' : 'Competitor');
+      role.textContent = solo ? '' : (i === 0 ? 'Primary' : 'Competitor');
       role.className = 'role' + (i === 0 ? ' primary' : '');
     }
     const rm = r.querySelector('.rm');
@@ -6194,7 +6167,7 @@ async function discoverAll(entries, sweepThrough){
      access simply cannot be read otherwise, and refusing to try only produced
      an empty inventory. Discovery is bounded by the clock, not by a count. */
   const opts = { allowProxy: true,
-                 budgetMs: clampInt($('#budget') ? $('#budget').value : 90, 20, 600, 90) * 1000 };
+                 budgetMs: DISCOVERY_CEILING_MS };
 
   /* Sites are independent: different hosts, different sitemaps, different
      proxies. Running them one after another meant a four-site sweep paid four
@@ -6263,8 +6236,8 @@ async function discoverAll(entries, sweepThrough){
       } else if(res && res.rootsFound && (res.childFailures || []).length){
         why = 'published a sitemap, but none of its ' + res.childFailures.length +
               ' child sitemaps could be fetched within the ' + Math.round((opts.budgetMs || 90000) / 1000) +
-              's budget. The sitemap exists and the proxy is the bottleneck, not the site. ' +
-              'Raise the discovery budget and run again';
+              's ceiling. The sitemap exists and the proxy is the bottleneck, not the site. ' +
+              'Retry the run; the proxies were the bottleneck, not the site';
       } else if(res && res.rootsFound){
         why = 'published a sitemap, but no URLs could be read from it. It may be empty, gzipped, or in a format this cannot parse';
       } else if(ctx && ctx.tp && ctx.solid === false){
@@ -6313,7 +6286,7 @@ async function discoverAll(entries, sweepThrough){
   if(!sites.length){
     $('#discStat').textContent = 'no URLs';
     $('#discSummary').innerHTML = '<div class="err"><b>Nothing to measure.</b><br>' + notes.join('<br>') +
-      '<br><br>Check the URL, raise the discovery budget under “Sampling and run options”, and try again.</div>';
+      '<br><br>Check the URL and try again.</div>';
     return;
   }
 
@@ -6397,18 +6370,6 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
 ['#perGroup','#totalCap'].forEach(s => $(s).addEventListener('change', () => { if(state.sites.length) renderSelection(); }));
 
 /* deep link: ?site=a.com&site=b.com */
-(function centralInit(){
-  const n = $('#centralMode');
-  if(!n) return;
-  const saved = localStorage.getItem('pss#centralMode');
-  if(saved) n.value = saved;
-  CENTRAL.mode = n.value;
-  n.addEventListener('change', () => {
-    CENTRAL.mode = n.value;
-    localStorage.setItem('pss#centralMode', n.value);
-    if(state.results.length) renderResults();
-  });
-})();
 (function fromQuery(){
   const q = new URLSearchParams(location.search);
   const sites = q.getAll('site').filter(Boolean);

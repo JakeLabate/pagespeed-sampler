@@ -136,10 +136,14 @@ stat tiles cannot tell them apart.
 
 ### Central tendency
 
-Site and collection figures use the **median** by default, and the mean is available as a
-toggle. A mean lets one catastrophic page decide which collection gets named the weakest,
-which is the wrong claim to put in front of a client. Whichever is chosen, the other is
-shown beside it and every table header names which was used.
+Site and collection figures are the **mean**, always. It used to be a toggle, which meant
+the same measurements could be regenerated under a different definition of the headline
+number, and a headline number that changes with a dropdown is not one you can defend.
+
+The median is still shown beside it everywhere, and every table header names which is
+which, so the case a median guards against stays visible: a mean lets one catastrophic
+page pull a collection's figure down, and when the two disagree sharply that is itself
+worth reading.
 
 ### Locale prefixes
 
@@ -596,6 +600,11 @@ decided and then had to keep re-deciding:
 | `proxyTemplate` | The Worker used ahead of the public proxy pool |
 | `strategies` | Always `mobile` and `desktop` |
 | `categories` | Always SEO, accessibility and best practices, alongside performance |
+| `CENTRAL.mode` | Always the mean. A report whose headline number can be regenerated under a different definition has no headline number |
+| `DISCOVERY_CEILING_MS` | Six minutes a site. A safety stop against a sitemap index that never resolves, not a budget |
+
+There is no client-name field either: the subject site's own name is the client name, and
+asking twice invited the two to disagree. There is no theme toggle: the app is dark.
 
 The report date is no longer a field either: it is read from the clock in the viewer's
 own time zone, not UTC, so a late-evening run does not carry tomorrow's date.
