@@ -503,6 +503,10 @@ const METRICS = {
   fcp:  { label:'FCP',  unit:'ms', good:1800, ni:3000, max:6000 },
   si:   { label:'Speed Index', unit:'ms', good:3400, ni:5800, max:10000 },
   ttfb: { label:'TTFB', unit:'ms', good:800,  ni:1800, max:4000 },
+  /* Not a Core Web Vital and not something a site controls directly. It is here
+     because it says what network this site's visitors are actually on, which is
+     the assumption every "seconds saved" figure in the report rests on. */
+  rtt:  { label:'RTT',  unit:'ms', good:100,  ni:300,  max:1000 },
   a11y: { label:'Accessibility', unit:'score', good:90, ni:50, higher:true, max:100 },
   bp:   { label:'Best practices', unit:'score', good:90, ni:50, higher:true, max:100 },
   seo:  { label:'SEO', unit:'score', good:90, ni:50, higher:true, max:100 }
@@ -578,9 +582,29 @@ const CRUX_MAP = {
   cumulative_layout_shift: 'cls',
   interaction_to_next_paint: 'inp',
   first_contentful_paint: 'fcp',
-  experimental_time_to_first_byte: 'ttfb'
+  experimental_time_to_first_byte: 'ttfb',
+  round_trip_time: 'rtt'
 };
-const CRUX_FIELDS = ['lcp','inp','cls','fcp','ttfb'];
+const CRUX_FIELDS = ['lcp','inp','cls','fcp','ttfb','rtt'];
+
+/* LCP is a sum, and CrUX reports its four parts separately. Which part
+   dominates decides who fixes it: the server team, whoever controls how the
+   image is discovered, the network, or whoever is blocking the render. A lab
+   audit guesses at this from one synthetic load; these are real users. */
+const LCP_PARTS = [
+  { api:'largest_contentful_paint_image_time_to_first_byte', id:'ttfb',
+    label:'Server response', colour:'#8b5cf6',
+    fix:'Time before the first byte arrives. Nothing else can start until this ends, so it caps every other fix.' },
+  { api:'largest_contentful_paint_image_resource_load_delay', id:'delay',
+    label:'Discovery delay', colour:'#eb6834',
+    fix:'The gap between the page arriving and the browser starting to fetch the LCP image. Almost always a preload, fetchpriority or lazy-loading problem, and usually the cheapest of the four to fix.' },
+  { api:'largest_contentful_paint_image_resource_load_duration', id:'load',
+    label:'Image download', colour:'#3987e5',
+    fix:'How long the image itself takes to arrive. This is the one that responds to compression, format and sizing.' },
+  { api:'largest_contentful_paint_image_element_render_delay', id:'render',
+    label:'Render delay', colour:'#199e70',
+    fix:'The image has arrived and the page still has not painted it. Main-thread work or render-blocking resources.' }
+];
 
 /* CLS arrives as a string because it is fractional; everything else is an
    integer millisecond count. */
@@ -602,8 +626,43 @@ function poorShare(hist){
 }
 
 function parseCruxRecord(rec){
-  const out = { metrics: {}, period: null };
+  const out = { metrics: {}, period: null, lcpParts: null, lcpType: null, nav: null };
   if(!rec) return out;
+  const M = rec.metrics || {};
+
+  /* The subparts are p75 only, with no histogram, so they are read straight. */
+  const parts = LCP_PARTS.map(p => {
+    const m = M[p.api];
+    return { id: p.id, label: p.label, colour: p.colour, fix: p.fix,
+             ms: m && m.percentiles ? cruxNum(m.percentiles.p75) : null };
+  });
+  if(parts.some(p => p.ms != null)){
+    const total = parts.reduce((n, p) => n + (p.ms || 0), 0);
+    out.lcpParts = total > 0
+      ? parts.map(p => Object.assign({}, p, { share: (p.ms || 0) / total })).concat([{ total }])
+      : null;
+    if(out.lcpParts) out.lcpTotal = total;
+  }
+
+  /* A fraction per resource type, so the largest is what LCP usually is. If it
+     is text, every image recommendation in the report is aimed at the wrong
+     element and the reader needs to know before acting on one. */
+  const rt = M.largest_contentful_paint_resource_type;
+  if(rt && rt.fractions){
+    const best = Object.entries(rt.fractions).map(([k, v]) => [k, cruxNum(v)])
+      .filter(x => x[1] != null).sort((a, b) => b[1] - a[1])[0];
+    if(best) out.lcpType = { type: best[0], share: best[1] };
+  }
+
+  /* Back/forward navigations are near-instant when the page qualifies for the
+     cache. Lighthouse reports whether it qualifies; this reports how often real
+     visitors actually got it. */
+  const nt = M.navigation_types;
+  if(nt && nt.fractions){
+    const f = {};
+    for(const [k, v] of Object.entries(nt.fractions)){ const n = cruxNum(v); if(n != null) f[k] = n; }
+    if(Object.keys(f).length) out.nav = f;
+  }
   for(const [cruxName, key] of Object.entries(CRUX_MAP)){
     const m = rec.metrics && rec.metrics[cruxName];
     if(!m) continue;
@@ -653,6 +712,8 @@ async function cruxForOrigin(origin, formFactor, key){
     throw now.__err;
   }
   const parsed = parseCruxRecord(now && now.record);
+  const extra = { lcpParts: parsed.lcpParts, lcpTotal: parsed.lcpTotal,
+                  lcpType: parsed.lcpType, nav: parsed.nav };
   const trend = {};
   const hrec = hist && hist.record;
   if(hrec && hrec.metrics){
@@ -663,8 +724,8 @@ async function cruxForOrigin(origin, formFactor, key){
     }
     if(Array.isArray(hrec.collectionPeriods)) trend.__periods = hrec.collectionPeriods.map(c => isoDate(c.lastDate));
   }
-  return { origin, formFactor, hasData: Object.keys(parsed.metrics).length > 0,
-           metrics: parsed.metrics, period: parsed.period, trend };
+  return Object.assign({ origin, formFactor, hasData: Object.keys(parsed.metrics).length > 0,
+           metrics: parsed.metrics, period: parsed.period, trend }, extra);
 }
 
 /* --------------------------------------------------------------- fetching */
@@ -6539,11 +6600,47 @@ function cruxSpark(series, key, w, h){
       '. Dashed line is the good threshold.</div>';
 }
 
+/* LCP is a sum of four phases. Naming the dominant one is the difference
+   between "your LCP is slow" and "68% of your LCP is server time, so the image
+   work is second priority". */
+function lcpAnatomyHTML(data){
+  const parts = (data.lcpParts || []).filter(p => p.id);
+  if(!parts.length) return '';
+  const total = data.lcpTotal || 0;
+  if(!total) return '';
+  const worst = parts.slice().sort((a, b) => b.share - a.share)[0];
+  const bar = '<div class="cxbar" style="height:9px">' + parts.map(p =>
+    '<i style="width:' + (p.share * 100).toFixed(1) + '%;background:' + p.colour + '" title="' +
+    esc(p.label + ' ' + fmtMs(p.ms)) + '"></i>').join('') + '</div>';
+  const key = '<div class="cxlegend">' + parts.map(p =>
+    '<span><i style="background:' + p.colour + '"></i>' + esc(p.label) + ' ' +
+    Math.round(p.share * 100) + '%</span>').join('') + '</div>';
+  return '<div class="cxtrend"><div class="cxsub" style="margin:0 0 7px">' +
+    'What LCP is made of, ' + esc(fmtMs(total)) + ' total' +
+    (data.lcpType ? ' \u00b7 usually ' + esc(data.lcpType.type) : '') + '</div>' +
+    bar + key +
+    '<div class="cxsub" style="margin:8px 0 0"><b style="color:var(--ink-2)">' +
+    esc(worst.label) + ' is ' + Math.round(worst.share * 100) + '% of it.</b> ' +
+    esc(worst.fix) + '</div></div>';
+}
+
+/* Lighthouse reports whether a page qualifies for the back/forward cache. This
+   reports how many real navigations actually got it, which is the number that
+   has any bearing on what visitors experienced. */
+function navHTML(nav){
+  if(!nav) return '';
+  const bf = nav.back_forward_cache;
+  if(bf == null || bf < 0.005) return '';
+  return '<div class="cxsub" style="margin:9px 0 0">' + Math.round(bf * 100) +
+    '% of real navigations were served from the back/forward cache, which is close to instant.</div>';
+}
+
 function cruxCardHTML(site, data, primary){
   const role = primary ? '<span class="role p">Subject</span>' : '<span class="role">Competitor</span>';
   const head = '<div class="cxhd"><b>' + esc(site.label) + '</b>' + role + '</div>' +
     '<div class="cxsub">' + esc(site.host || hostLabel(site.origin)) +
-    (data && data.period ? ' \u00b7 ' + esc(data.period) : '') + '</div>';
+    (data && data.period ? ' \u00b7 ' + esc(data.period) : '') +
+    (data && data.hasData ? ' \u00b7 phone' : '') + '</div>';
   if(!data || !data.hasData){
     return '<div class="cxcard' + (primary ? ' subject' : '') + '">' + head +
       '<div class="cxverdict none">No field data</div>' +
@@ -6566,10 +6663,25 @@ function cruxCardHTML(site, data, primary){
   const trendKey = CWV_CORE.find(k => (data.trend || {})[k] && data.trend[k].length > 2);
   const trend = trendKey
     ? '<div class="cxtrend">' + cruxSpark(data.trend[trendKey], trendKey, 260, 46) + '</div>' : '';
+
+  /* A site can pass on one form factor and fail on the other, and Google
+     assesses them separately, so a phone pass that hides a desktop failure is
+     the same omission as no data at all. */
+  const d = data.desktop;
+  let deskLine = '';
+  if(d && d.hasData){
+    const dv = cwvVerdict(d.metrics);
+    deskLine = '<div class="cxsub" style="margin:9px 0 0"><b style="color:' +
+      (dv.state === 'pass' ? '#5fd35f' : dv.state === 'fail' ? '#f08585' : 'var(--muted)') +
+      '">Desktop: ' + esc(dv.label.replace(' Core Web Vitals', '')) + '.</b> ' + esc(dv.why) + '</div>';
+  } else if(d){
+    deskLine = '<div class="cxsub" style="margin:9px 0 0">No desktop field data for this origin.</div>';
+  }
+
   return '<div class="cxcard' + (primary ? ' subject' : '') + '">' + head +
     '<div class="cxverdict ' + v.state + '">' + esc(v.label) + '</div>' +
     '<div class="cxsub" style="margin:-6px 0 10px">' + esc(v.why) + '</div>' +
-    rows + trend + '</div>';
+    rows + deskLine + navHTML(data.nav) + lcpAnatomyHTML(data) + trend + '</div>';
 }
 
 async function runInstant(){
@@ -6599,8 +6711,27 @@ async function runInstant(){
   try{
     /* Every origin at once. There is no page load to wait on, so the wall clock
        is one round trip regardless of how many sites are in the list. */
-    const results = await Promise.all(sites.map(s =>
-      cruxForOrigin(s.origin, 'PHONE', key).catch(e => ({ origin: s.origin, hasData: false, error: e.message }))));
+    /* Phone and desktop are assessed separately by Google, so a site can pass
+       on one and fail on the other. Both go out in the same wave; there is no
+       page load to wait on, so the wall clock does not change. */
+    const jobs = [];
+    sites.forEach(s => ['PHONE','DESKTOP'].forEach(ff => jobs.push({ s, ff })));
+    const raw = await Promise.all(jobs.map(j =>
+      cruxForOrigin(j.s.origin, j.ff, key).catch(e => ({ origin: j.s.origin, formFactor: j.ff, hasData: false, error: e.message }))));
+    const byOrigin = new Map();
+    raw.forEach(r => {
+      if(!byOrigin.has(r.origin)) byOrigin.set(r.origin, {});
+      byOrigin.get(r.origin)[r.formFactor] = r;
+    });
+    const results = sites.map(s => {
+      const both = byOrigin.get(s.origin) || {};
+      const phone = both.PHONE || { hasData: false }, desktop = both.DESKTOP || { hasData: false };
+      /* Phone leads because that is what Google ranks on and what most visits
+         are, but a desktop-only failure is still a failure and gets said. */
+      return Object.assign({}, phone, { phone, desktop,
+        hasData: !!(phone.hasData || desktop.hasData),
+        error: phone.error || desktop.error });
+    });
     const ms = Date.now() - t0;
     const withData = results.filter(r => r.hasData).length;
 
@@ -6611,10 +6742,12 @@ async function runInstant(){
 
     const failed = results.filter(r => r.error && !r.hasData && !/not found|404/i.test(r.error || ''));
     $('#instantBody').innerHTML =
-      '<p class="hint" style="margin:0 0 14px">The measurement Google actually assesses: 28 days of real Chrome visits ' +
-      'on real devices and connections, phone form factor, at the origin level. This is a lookup rather than a page load, ' +
-      'which is why it returns in about a second. It says how these sites are doing. It cannot say why, and the ' +
-      'opportunities, byte savings and stack fixes all come from the full audit.</p>' +
+      '<p class="hint" style="margin:0 0 14px">The measurement Google actually assesses: 28 days of real Chrome visits on ' +
+      'real devices and connections, at the origin level, phone and desktop assessed separately. This is a lookup rather ' +
+      'than a page load, which is why it returns in about a second however many sites are listed. ' +
+      '<b>RTT</b> is the round-trip time those visitors really had, so it says which of the connection bands in the full ' +
+      'report actually describes this audience. The full audit is still where the opportunities, byte savings and stack ' +
+      'fixes come from: this lane says what is wrong and which part of LCP owns it, not which file to change.</p>' +
       '<div class="crux">' + cards + '</div>' +
       (failed.length ? '<div class="err" style="margin-top:14px"><b>Some origins could not be read.</b><br>' +
         failed.map(f => esc(hostLabel(f.origin)) + ': ' + esc(f.error)).join('<br>') +

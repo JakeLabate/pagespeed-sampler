@@ -48,6 +48,19 @@ no page load to wait on. It gives:
 - 25 collection periods of trend, drawn against the good threshold. Direction is an
   argument a lab score cannot make: a site that was fine in March and is not now has a
   cause with a date on it.
+- **Phone and desktop assessed separately**, because Google assesses them separately and
+  a site can pass on one and fail on the other.
+- **What LCP is made of.** CrUX reports LCP's four phases: server response, discovery
+  delay, image download and render delay. Naming the dominant one is the difference
+  between "your LCP is slow" and "59% of your LCP is server time, so the image work is
+  second priority". Those are four different fixes with four different owners, and a lab
+  audit can only guess at the split from one synthetic load.
+- **What LCP usually is.** If the LCP element is text rather than an image, every image
+  recommendation in the report is aimed at the wrong element.
+- **Real round-trip time**, which says which of the report's connection bands actually
+  describes this site's audience rather than assuming one.
+- **Back/forward cache share.** Lighthouse reports whether a page *qualifies*; CrUX
+  reports what fraction of real navigations actually got it.
 
 What it cannot do is say *why*. Every opportunity, byte saving, connection-band second
 and stack fix comes from Lighthouse and needs the slow lane. **Now run the full audit**
@@ -56,8 +69,19 @@ goes straight there.
 Origins with too little traffic return no data, which is a fact about traffic volume
 rather than about speed, and the card says so rather than leaving a gap.
 
+Four calls per site (current and history, phone and desktop) all fire together, so the
+wall clock is one round trip whatever the site count.
+
 Needs the **Chrome UX Report API** enabled on the same Google Cloud project as the
 PageSpeed key. Same key, no OAuth. Its quota is separate: 150 queries a minute.
+
+### What is deliberately not here
+
+| Source | Why not |
+|---|---|
+| CrUX BigQuery | Origin-level percentile ranking against every origin in a country needs a BigQuery project, so it belongs in a separate tool rather than a browser app |
+| Search Console | Traffic-weighted sampling would fix this tool's oldest weakness, but it only works for properties you own and needs OAuth per property |
+| CrUX Vis | A viewer over the History API. Nothing in it we are not already reading |
 
 ## Opportunities
 
