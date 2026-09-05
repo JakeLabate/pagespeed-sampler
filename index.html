@@ -308,7 +308,7 @@ footer .by{margin-left:auto}
 <header class="top">
   <div class="grow">
     <h1>PageSpeed Sampler</h1>
-    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Add up to four sites to benchmark a client against its competitors, page role by page role. Free to use, no API key needed.</p>
+    <p class="sub">Free to use, no API key needed.</p>
   </div>
 </header>
 
@@ -339,7 +339,6 @@ footer .by{margin-left:auto}
         <div>
           <label class="f" for="totalCap">Max URLs per site</label>
           <input type="number" id="totalCap" value="100" min="1" max="100">
-          <div class="hint">The ceiling applies to each site on its own, so a four-site run measures up to four times this number.</div>
         </div>
         <div>
           <label class="f" for="repeats">Runs per URL</label>
@@ -348,7 +347,6 @@ footer .by{margin-left:auto}
             <option value="2">2, median of both</option>
             <option value="3">3, median of three</option>
           </select>
-          <div class="hint">A single Lighthouse run swings several points between identical executions. More runs cost proportionally more quota and give a per-page number you can defend when a client re-runs it.</div>
         </div>
       </div>
     </div>
@@ -443,7 +441,6 @@ footer .by{margin-left:auto}
 </section>
 
 <footer>
-  <p class="cap">The interface and all of the analysis run in your browser. Measurements come from Google's PageSpeed Insights API, reached through this site's own metered backend unless you supply your own key, in which case your browser talks to Google directly. Sitemaps are fetched directly where a site allows it and through a proxy where it does not. <a href="privacy.html#the-backend">What the backend sees</a>.</p>
   <a href="flow.html">How it works</a>
   <a href="privacy.html">Privacy</a>
   <a href="terms.html">Terms</a>
