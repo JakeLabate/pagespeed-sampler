@@ -28,7 +28,7 @@
 <p class="updated">Last updated 3 September 2026</p>
 </div>
 
-<div class="toc"><p class="h">On this page</p><ol><li><a href="#who-this-covers">Who this covers</a></li><li><a href="#what-is-stored-and-where">What is stored, and where</a></li><li><a href="#what-is-sent-and-to-whom">What is sent, and to whom</a></li><li><a href="#google-account-access">Google account access</a></li><li><a href="#analytics-and-tracking">Analytics and tracking</a></li><li><a href="#hosting">Hosting</a></li><li><a href="#children">Children</a></li><li><a href="#changes">Changes</a></li><li><a href="#contact">Contact</a></li></ol></div>
+<div class="toc"><p class="h">On this page</p><ol><li><a href="#who-this-covers">Who this covers</a></li><li><a href="#what-is-stored-and-where">What is stored, and where</a></li><li><a href="#what-is-sent-and-to-whom">What is sent, and to whom</a></li><li><a href="#the-backend">What the backend sees</a></li><li><a href="#google-account-access">Google account access</a></li><li><a href="#analytics-and-tracking">Analytics and tracking</a></li><li><a href="#hosting">Hosting</a></li><li><a href="#children">Children</a></li><li><a href="#changes">Changes</a></li><li><a href="#contact">Contact</a></li></ol></div>
 <div class="callout">
 <p class="tag">The short version</p>
 <p>PageSpeed Sampler is a single HTML page with no server and no database. Everything it does happens in your own browser. Nothing you type into it is transmitted to, stored by, or visible to Jake Labate or anyone else operating this tool, because there is nothing operating it. It is a static file.</p>
@@ -42,15 +42,27 @@
 <p>This data never leaves your browser. It is not synced, not backed up, and not readable by anyone else. Clearing your browser's site data for this domain deletes all of it.</p>
 
 <h2 id="what-is-sent-and-to-whom">What is sent, and to whom<a class="anchor" href="#what-is-sent-and-to-whom" aria-label="Link to this section">#</a></h2>
-<p>The tool makes requests to third parties on your behalf. It has no servers of its own, so there is no intermediate party.</p>
+<p>The tool makes requests to third parties on your behalf. Unless you supply your own API key, those requests go through a small backend run by Jake Labate, described in the next section, so that you do not need a Google Cloud account to use this.</p>
 <ul>
-<li><strong>Chrome UX Report API.</strong> The instant read sends each origin you enter to <code>chromeuxreport.googleapis.com</code> with your API key, and gets back that origin&rsquo;s real-user Core Web Vitals. It is a lookup of data Google already holds; nothing about your visit is added to it.</li>
+<li><strong>Chrome UX Report API.</strong> The instant read sends each origin you enter to <code>chromeuxreport.googleapis.com</code>, with your API key if you supplied one and otherwise through the backend below, and gets back that origin&rsquo;s real-user Core Web Vitals. It is a lookup of data Google already holds; nothing about your visit is added to it.</li>
 <li><strong>Google PageSpeed Insights API.</strong> Each URL you choose to measure is sent to <code>pagespeedonline.googleapis.com</code>, along with your API key if you supplied one. This is how the measurement happens. Google's handling of those requests is governed by the <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">Google Privacy Policy</a>.</li>
 <li><strong>The sites you measure.</strong> To find a sitemap, the tool requests <code>robots.txt</code> and common sitemap paths from the sites you enter, directly from your browser.</li>
 <li><strong>Public CORS proxies.</strong> Most sites do not allow a browser to read their sitemap cross-origin. When a direct request is blocked, the tool retries through a public proxy so it can read the file. The proxies it may use are allorigins, codetabs, corsproxy.io, isomorphic-git and thingproxy. Only the public sitemap URL is passed to them; your API key and your settings are never sent to a proxy. You can switch this off with the <em>Allow public CORS proxies</em> checkbox, in which case only sites that permit direct access will be discoverable.</li>
-<li><strong>This deployment&rsquo;s own proxy.</strong> Sitemap requests are tried through a Cloudflare Worker run by Jake Labate, ahead of any public proxy, because sites behind a WAF block the public ones by address. It is passed the public sitemap URL and nothing else, it keeps no logs of its own, and your API key and your settings are never sent to it.</li>
+<li><strong>This deployment&rsquo;s own backend.</strong> A Cloudflare Worker run by Jake Labate does two jobs. It fetches sitemaps, ahead of any public proxy, because sites behind a WAF block the public ones by address. And, when you have not supplied your own API key, it makes the PageSpeed and Chrome UX Report calls for you using keys it holds, so the tool is usable without a Google Cloud account. What it receives is set out in the next section. Your own API key, if you enter one, is never sent to it: the backend is bypassed entirely and your browser talks to Google directly.</li>
 <li><strong>Google Sheets and Drive.</strong> Only if you choose to create a Google Sheet. See the next section.</li>
 </ul>
+
+<h2 id="the-backend">What the backend sees<a class="anchor" href="#the-backend" aria-label="Link to this section">#</a></h2>
+<div class="phase">
+<p>This section applies only when you have <em>not</em> entered your own API key. With a key in the field the backend is bypassed and none of it happens.</p>
+<div class="scroller"><table>
+<tr><th>The URLs you measure</th><td>It has to receive them, because it is the thing that asks Google to measure them. They are public URLs on sites you chose to enter.</td></tr>
+<tr><th>A hash of your IP address</th><td>Used to meter a daily allowance so that one visitor cannot exhaust the shared quota. Your raw IP address is never stored. What is stored is a salted one-way hash of it and a running count for the day, both of which expire automatically once the day ends.</td></tr>
+<tr><th>Nothing else</th><td>No account, no cookie, no name, no email, no browser fingerprint, and no record of which sites a given visitor looked at. The stored counter is a number, not a history.</td></tr>
+</table></div>
+<p>Measurement results are cached for six hours so a page already measured is not measured again. The cache is keyed on the URL and shared between all visitors, so a result you receive may have been produced by someone else&rsquo;s request and yours may be reused for someone else. What is cached is a public page&rsquo;s public performance data, and it is not linked to whoever asked for it.</p>
+<p>Cloudflare operates the network the backend runs on and processes requests under its own terms. The API keys the backend uses belong to Jake Labate, and the quota they spend is his.</p>
+</div>
 
 <h2 id="google-account-access">Google account access<a class="anchor" href="#google-account-access" aria-label="Link to this section">#</a></h2>
 <p>The Google Sheets export is optional and off unless you configure it. When you use it, the tool requests a single scope: <code>https://www.googleapis.com/auth/drive.file</code>.</p>

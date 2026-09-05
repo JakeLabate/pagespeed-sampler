@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pss-proxy",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+
+  // Per-IP daily allowance. See README for the arithmetic behind these numbers.
+  "vars": {
+    "DAILY_CALLS": "200",
+    "DAILY_CRUX": "60",
+    "ALLOW_ORIGIN": "https://pagespeed.jakelabate.com"
+  },
+
+  // Created with: npx wrangler kv namespace create BUDGET
+  // Paste the id it prints into the line below.
+  "kv_namespaces": [
+    { "binding": "BUDGET", "id": "PASTE_KV_NAMESPACE_ID_HERE" }
+  ]
+
+  // Secrets are NOT set here. Set them once with:
+  //   npx wrangler secret put PSI_KEYS       (comma separated, one per project)
+  //   npx wrangler secret put TOKEN_SECRET   (any long random string)
+}

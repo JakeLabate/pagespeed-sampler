@@ -154,6 +154,7 @@ tbody tr:hover{background:var(--surface-2)}
 .urlcell a:hover{text-decoration:underline}
 .tag{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
   padding:1.5px 6px;border-radius:5px;background:var(--surface-3);color:var(--ink-2);margin-left:6px;vertical-align:1px}
+.opt{font-weight:400;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);margin-left:6px}
 .tag.key{background:color-mix(in srgb,var(--accent) 16%,transparent);color:var(--accent)}
 
 /* stat tiles */
@@ -306,7 +307,7 @@ footer .by{margin-left:auto}
 <header class="top">
   <div class="grow">
     <h1>PageSpeed Sampler</h1>
-    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Add up to four sites to benchmark a client against its competitors, page role by page role. Runs entirely in your browser.</p>
+    <p class="sub">Finds a site's sitemap, groups the URLs into collection types, samples up to 10 pages per collection (100 max) with key pages pinned, measures each one with the Google PageSpeed Insights API, then averages the results. Add up to four sites to benchmark a client against its competitors, page role by page role. Free to use, no API key needed.</p>
   </div>
 </header>
 
@@ -320,9 +321,10 @@ footer .by{margin-left:auto}
       <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
     </div>
     <div>
-      <label class="f" for="key">PageSpeed Insights API key</label>
-      <input type="password" id="key" placeholder="AIza..." spellcheck="false" autocomplete="off">
-      <div class="hint">Stored only in this browser. <a href="https://developers.google.com/speed/docs/insights/v5/get-started#key" target="_blank" rel="noopener">Get a free key</a>. Without one Google throttles hard and most runs fail.</div>
+      <label class="f" for="key">PageSpeed Insights API key <span class="opt">optional</span></label>
+      <input type="password" id="key" placeholder="Leave blank to use the free allowance" spellcheck="false" autocomplete="off">
+      <div class="hint" id="budgetLine" hidden></div>
+      <div class="hint">Add your own key to measure more than the free allowance, or larger sites. <a href="https://developers.google.com/speed/docs/insights/v5/get-started#key" target="_blank" rel="noopener">Get a free key</a>. It is stored only in this browser and sent only to Google.</div>
     </div>
   </div>
 
@@ -386,7 +388,12 @@ footer .by{margin-left:auto}
 <section class="card hidden" id="instantCard">
   <div class="hd"><span class="step">&#9889;</span><h2 class="grow">Instant read</h2>
     <span class="stat" id="instantStat"></span>
-    <div class="btnrow"><button class="btn ghost sm" id="instantDeepen" type="button">Now run the full audit</button></div>
+    <div class="btnrow">
+      <button class="btn ghost sm hidden" id="instantCsv" type="button">CSV</button>
+      <button class="btn ghost sm hidden" id="instantJson" type="button">JSON</button>
+      <button class="btn sm hidden" id="instantReport" type="button">Report</button>
+      <button class="btn ghost sm" id="instantDeepen" type="button">Now run the full audit</button>
+    </div>
   </div>
   <div id="instantBody"></div>
 </section>
@@ -466,6 +473,10 @@ const CONFIG = {
   /* Tried ahead of the public pool, because it is on an address WAFs do not
      block wholesale and because the audited URLs then go to a server we run. */
   proxyTemplate: 'https://pss-proxy.jake-a-labate.workers.dev/?url={url}',
+  /* The same Worker also holds the API keys, so a visitor does not need a Google
+     Cloud project to use this. Set to '' to turn the hosted allowance off and
+     require every visitor to bring their own key. */
+  apiBase: 'https://pss-proxy.jake-a-labate.workers.dev',
   strategies: ['mobile', 'desktop'],
   categories: ['seo', 'accessibility', 'best-practices']
 };
@@ -486,6 +497,7 @@ PERSIST.forEach(sel => {
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
   n.addEventListener('change', () => localStorage.setItem(k, n.value));
 });
+
 [].forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.checked = v === '1';
@@ -573,6 +585,107 @@ function fmtSecs(ms){
    real devices. Two sites is two round trips. So the tool has two lanes now,
    and this is the fast one: it answers "how are these sites doing" in about a
    second. It cannot answer "why", which is what the Lighthouse lane is for. */
+/* The hosted allowance. Nothing here is required: with no backend configured,
+   or none left for today, the app falls back to the visitor's own key and
+   behaves exactly as it did before this existed. */
+const backend = {
+  status: null,           // last /budget answer, null until probed
+  psi: null,              // { token, calls } for this run
+  crux: null,
+  base(){ return (CONFIG.apiBase || '').replace(/\/+$/, ''); },
+  configured(){ return !!this.base(); },
+  async probe(){
+    if(!this.configured()) return null;
+    try{
+      const r = await fetch(this.base() + '/budget', { method:'GET' });
+      if(!r.ok) return null;
+      this.status = await r.json();
+      return this.status;
+    }catch(e){ return null; }
+  },
+  /* Claims a slice of today's allowance up front. Returns null when there is
+     none left, which is the caller's cue to ask for a key rather than to fail. */
+  async reserve(kind, calls){
+    if(!this.configured()) return null;
+    try{
+      const r = await fetch(this.base() + '/reserve', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ kind, calls })
+      });
+      const j = await r.json().catch(() => null);
+      if(r.ok && j && j.token){ this[kind] = j; return j; }
+      this.lastRefusal = j || { error:'unavailable' };
+      return null;
+    }catch(e){ this.lastRefusal = { error:'unreachable' }; return null; }
+  },
+  /* A cancelled or short run should not spend what it did not use. Best effort:
+     if this never lands, the allowance simply resets at midnight. */
+  release(kind, unused){
+    const t = this[kind];
+    if(!this.configured() || !t || !unused || unused < 1) return;
+    try{
+      fetch(this.base() + '/release', { method:'POST', keepalive:true,
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ token: t.token, unused }) });
+    }catch(e){}
+  }
+};
+
+/* One run measures either against the visitor's own key, straight to Google, or
+   against the hosted allowance through the Worker. Everything downstream reads
+   this object rather than deciding for itself. */
+function ownKeyRoute(key){ return { mode:'own', key: key }; }
+function hostedRoute(token){ return { mode:'hosted', token: token }; }
+
+/* Says what the run should measure against. A key in the field always wins: it
+   is the visitor's own quota and they asked for it to be used. Otherwise the
+   hosted allowance, and if that is gone, nothing, with a reason the caller can
+   put in front of the visitor. */
+async function routeFor(kind, calls, errBox){
+  const own = ($('#key').value || '').trim();
+  if(own) return ownKeyRoute(own);
+  const got = await backend.reserve(kind, calls);
+  if(got) return hostedRoute(got.token);
+  const why = backend.lastRefusal || {};
+  if(errBox) $(errBox).innerHTML = exhaustedNotice(why, kind);
+  showBudget();
+  return null;
+}
+
+/* The dead end has to be a doorway, or the visitor just leaves. */
+function exhaustedNotice(why, kind){
+  const what = kind === 'crux' ? 'instant reads' : 'measurements';
+  if(!backend.configured() || why.error === 'no_backend' || why.error === 'unreachable'){
+    return '<div class="err">This needs a Google PageSpeed Insights API key. ' +
+      '<a href="https://developers.google.com/speed/docs/insights/v5/get-started#key" target="_blank" rel="noopener">Get a free one</a>' +
+      ' and paste it in the field above. It is stored only in this browser.</div>';
+  }
+  const hrs = why.resets_in_s ? Math.max(1, Math.round(why.resets_in_s / 3600)) : null;
+  return '<div class="note"><b>The free allowance for today is used up.</b> ' +
+    'You have ' + (why.left != null ? why.left : 0) + ' of ' + (why.limit != null ? why.limit : '') +
+    ' free ' + what + ' left' + (hrs ? ', and it resets in about ' + hrs + ' hour' + (hrs === 1 ? '' : 's') : '') + '. ' +
+    'To keep going now, paste your own API key in the field above: ' +
+    '<a href="https://developers.google.com/speed/docs/insights/v5/get-started#key" target="_blank" rel="noopener">get a free key</a>' +
+    '. Your key is stored only in this browser and its quota is your own.</div>';
+}
+
+/* What the visitor has left, said before they spend it rather than after. */
+function showBudget(){
+  const el = $('#budgetLine');
+  if(!el) return;
+  const own = ($('#key').value || '').trim();
+  if(own){
+    el.textContent = 'Using your own key, so the only limit is your own Google quota.';
+    el.hidden = false;
+    return;
+  }
+  const st = backend.status;
+  if(!st || !st.available){ el.hidden = true; return; }
+  el.textContent = 'Free, no key needed: ' + st.psi.left + ' of ' + st.psi.limit +
+    ' measurements and ' + st.crux.left + ' of ' + st.crux.limit + ' instant reads left today.';
+  el.hidden = false;
+}
+
 const CRUX_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord';
 const CRUX_HISTORY_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord';
 
@@ -683,8 +796,13 @@ function isoDate(d){
   return d.year + '-' + p(d.month) + '-' + p(d.day);
 }
 
-async function cruxPost(endpoint, body, key){
-  const r = await fetch(endpoint + '?key=' + encodeURIComponent(key), {
+async function cruxPost(endpoint, body, route){
+  const hosted = route && route.mode === 'hosted';
+  const url = hosted
+    ? backend.base() + (endpoint === CRUX_HISTORY_ENDPOINT ? '/crux/history' : '/crux') +
+      '?t=' + encodeURIComponent(route.token)
+    : endpoint + '?key=' + encodeURIComponent((route && route.key) || '');
+  const r = await fetch(url, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body)
   });
@@ -700,11 +818,11 @@ async function cruxPost(endpoint, body, key){
 
 /* One origin, one form factor, current period plus 25 weeks of history. The two
    calls are independent, so they go together. */
-async function cruxForOrigin(origin, formFactor, key){
+async function cruxForOrigin(origin, formFactor, route){
   const body = { origin, formFactor };
   const [now, hist] = await Promise.all([
-    cruxPost(CRUX_ENDPOINT, body, key).catch(e => ({ __err: e })),
-    cruxPost(CRUX_HISTORY_ENDPOINT, Object.assign({ collectionPeriodCount: 25 }, body), key)
+    cruxPost(CRUX_ENDPOINT, body, route).catch(e => ({ __err: e })),
+    cruxPost(CRUX_HISTORY_ENDPOINT, Object.assign({ collectionPeriodCount: 25 }, body), route)
       .catch(() => null)
   ]);
   if(now && now.__err){
@@ -2667,13 +2785,15 @@ function isRetryableMessage(m){
   return /timed out|timeout|ERRORED_DOCUMENT_REQUEST|INTERNAL|internal error|try again|unavailable|temporarily|overload|quota|rate limit|too many/i.test(m);
 }
 
-async function psiRun(url, strategy, key, categories){
+async function psiRun(url, strategy, route, categories){
   const p = new URLSearchParams();
   p.set('url', url);
   p.set('strategy', strategy);
   categories.forEach(c => p.append('category', c));
-  if(key) p.set('key', key);
-  const endpoint = PSI_ENDPOINT + '?' + p.toString();
+  const hosted = route && route.mode === 'hosted';
+  if(hosted) p.set('t', route.token);
+  else if(route && route.key) p.set('key', route.key);
+  const endpoint = (hosted ? backend.base() + '/psi' : PSI_ENDPOINT) + '?' + p.toString();
   const MAX = 4;
   let lastErr = 'unknown error';
   for(let attempt = 0; attempt < MAX; attempt++){
@@ -2748,7 +2868,6 @@ async function runPool(items, limit, worker, onDone){
 }
 
 async function runTest(){
-  const key = $('#key').value.trim();
   const cats = selectedCategories();
   const strategies = [];
   CONFIG.strategies.forEach(x => strategies.push(x));
@@ -2767,8 +2886,17 @@ async function runTest(){
   $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
   $('#progWrap').classList.remove('hidden');
   $('#runErr').innerHTML = '';
-  if(!key){
-    $('#runErr').innerHTML = '<div class="note">No API key set. Google allows only a trickle of unauthenticated PageSpeed requests, so most of these will fail. Add a key and re-run if you see errors below.</div>';
+
+  /* Claim the allowance for exactly this many calls before measuring anything,
+     so a visitor is told up front that there is not enough left rather than
+     halfway through a sweep. */
+  const route = await routeFor('psi', allJobs.length, '#runErr');
+  if(!route){
+    state.running = false;
+    $('#runBtn').disabled = false; $('#stopBtn').disabled = true; $('#reSample').disabled = false;
+    $('#progWrap').classList.add('hidden');
+    $('#key').focus();
+    return;
   }
 
   const t0 = Date.now();
@@ -2848,7 +2976,7 @@ async function runTest(){
     }
 
     const passResults = await runPool(pending, limit, async job => {
-      return await psiRun(job.item.url, job.strategy, key, cats);
+      return await psiRun(job.item.url, job.strategy, route, cats);
     }, (doneInPass, totalInPass, res) => {
       if(res) record(res.item, res.ok, res.ok ? res.value : res.error);
       const settled = state.results.reduce((n, r) => n + (r.samples || (r.ok ? 1 : 1)), 0);
@@ -2898,8 +3026,9 @@ async function retryFailures(strategyFilter){
   if(state.running) return;
   const failed = state.results.filter(r => !r.ok && (!strategyFilter || r.strategy === strategyFilter) && r.item);
   if(!failed.length) return;
-  const key = $('#key').value.trim();
   const cats = selectedCategories();
+  const route = await routeFor('psi', failed.length, '#runErr');
+  if(!route) return;
   state.running = true; state.cancel = false;
   $('#runBtn').disabled = true; $('#stopBtn').disabled = false; $('#reSample').disabled = true;
   $('#progWrap').classList.remove('hidden'); $('#progBar').style.width = '0%';
@@ -2909,7 +3038,7 @@ async function retryFailures(strategyFilter){
   limiter.reset(120, limit);
   const t0 = Date.now();
 
-  await runPool(jobs, limit, async job => psiRun(job.item.url, job.strategy, key, cats), (done, total, res) => {
+  await runPool(jobs, limit, async job => psiRun(job.item.url, job.strategy, route, cats), (done, total, res) => {
     if(res){
       const k = res.item.item.url + '|' + res.item.strategy;
       const i = state.index.get(k);
@@ -5406,6 +5535,264 @@ function reportModelFromRules(rows, sites, meta, allRows){
 }
 function lowerFirst(s){ return s.charAt(0).toLowerCase() + s.slice(1); }
 
+/* ------------------------------------------------- the instant deliverable
+   The fast lane earns its name only if what comes out of it is something you
+   can send. This is the same branded document as the full audit, built from
+   CrUX alone, and it exists about a second after the button is pressed. */
+
+/* Findings, generated the same way the full report's are: a fixed rule set
+   applied to the measurements, no prose written by hand at generation time. */
+function instantFindings(sites, results){
+  const out = [];
+  const subject = { site: sites[0], data: results[0] };
+  const add = (sev, title, body) => out.push({ sev, title, body });
+
+  for(let i = 0; i < sites.length; i++){
+    const site = sites[i], d = results[i];
+    const who = site.name || hostLabel(site.origin);
+    if(!d || !d.hasData) continue;
+    const primary = i === 0;
+    if(!primary) continue;   // findings are about the subject, as in the full report
+
+    const v = cwvVerdict(d.metrics);
+    if(v.state === 'fail'){
+      const failing = CWV_CORE.filter(k => d.metrics[k] && grade(k, d.metrics[k].p75) !== 'good');
+      add('critical', who + ' fails Core Web Vitals on ' + failing.map(k => METRICS[k].label).join(' and '),
+        'Core Web Vitals passes only when LCP, INP and CLS are all inside the good band at the 75th percentile. ' +
+        failing.map(k => METRICS[k].label + ' is ' + fmt(k, d.metrics[k].p75) + ' against a ' +
+          fmt(k, METRICS[k].good) + ' threshold, with ' + Math.round((d.metrics[k].good || 0) * 100) +
+          '% of visits inside the good band').join('. ') + '.');
+    } else if(v.state === 'pass'){
+      add('minor', who + ' passes Core Web Vitals',
+        'LCP, INP and CLS are all inside the good band on real visits. The work below is refinement rather than repair.');
+    }
+
+    /* The whole point of the fast lane: not that LCP is slow, but which quarter
+       of it is slow, because that decides who does the work. */
+    const parts = (d.lcpParts || []).filter(x => x.id);
+    if(parts.length && d.lcpTotal){
+      const worst = parts.slice().sort((a, b) => b.share - a.share)[0];
+      add(worst.share > 0.5 ? 'serious' : 'moderate',
+        worst.label + ' is ' + Math.round(worst.share * 100) + '% of ' + who + '\u2019s LCP',
+        worst.fix + ' Total LCP is ' + fmtMs(d.lcpTotal) + ', split ' +
+        parts.map(x => x.label.toLowerCase() + ' ' + fmtMs(x.ms)).join(', ') + '. ' +
+        'Work on any other phase is capped by this one.');
+    }
+    if(d.lcpType && d.lcpType.type && d.lcpType.type !== 'image'){
+      add('moderate', who + '\u2019s largest element is usually ' + d.lcpType.type + ', not an image',
+        'On ' + Math.round(d.lcpType.share * 100) + '% of visits the largest contentful paint is ' + d.lcpType.type +
+        '. Image compression and format work will not move LCP here; font loading and render-blocking resources will.');
+    }
+
+    const dk = d.desktop;
+    if(dk && dk.hasData){
+      const dv = cwvVerdict(dk.metrics);
+      if(dv.state !== v.state){
+        add('serious', who + ' is assessed differently on phone and desktop',
+          'Phone ' + (v.state === 'pass' ? 'passes' : v.state === 'fail' ? 'fails' : 'is not assessed') +
+          ' and desktop ' + (dv.state === 'pass' ? 'passes' : dv.state === 'fail' ? 'fails' : 'is not assessed') +
+          '. Google assesses the two separately, so one passing does not cover the other.');
+      }
+    }
+
+    for(const k of CWV_CORE){
+      const t = (d.trend || {})[k];
+      if(!Array.isArray(t) || t.length < 6) continue;
+      const first = t[0], last = t[t.length - 1];
+      if(first == null || last == null || !first) continue;
+      if(last > first * 1.15){
+        add('serious', METRICS[k].label + ' on ' + who + ' has been getting worse',
+          'Over ' + t.length + ' collection periods it has moved from ' + fmt(k, first) + ' to ' + fmt(k, last) +
+          '. A trend has a cause with a date on it, which is a narrower thing to look for than a general slowness.');
+      }
+    }
+
+    const bf = d.nav && d.nav.back_forward_cache;
+    if(bf != null && bf < 0.05){
+      add('moderate', 'Almost no navigations on ' + who + ' use the back/forward cache',
+        Math.round(bf * 100) + '% of real navigations were served from it. A qualifying page makes back and forward ' +
+        'near-instant, and the usual disqualifiers are an unload handler or a no-store cache header.');
+    }
+  }
+
+  /* Competitors enter only where the comparison is the point. */
+  const others = sites.map((s2, i) => ({ s: s2, d: results[i] }))
+    .filter((x, i) => i > 0 && x.d && x.d.hasData);
+  const sv = subject.data && subject.data.hasData ? cwvVerdict(subject.data.metrics) : null;
+  const passing = others.filter(o => cwvVerdict(o.d.metrics).state === 'pass');
+  if(sv && sv.state === 'fail' && passing.length){
+    add('serious', passing.map(o => o.s.name || hostLabel(o.s.origin)).join(' and ') +
+      ' pass Core Web Vitals where ' + (subject.site.name || hostLabel(subject.site.origin)) + ' does not',
+      'The threshold is reachable in this sector on real traffic, which removes the argument that it is unrealistic here.');
+  }
+  const order = { critical:0, serious:1, moderate:2, minor:3 };
+  return out.sort((a, b) => order[a.sev] - order[b.sev]);
+}
+
+function instantReportHTML(sites, results){
+  const E = esc;
+  const subject = sites[0], sd = results[0];
+  const competitors = sites.slice(1);
+  const multi = competitors.length > 0;
+  const label = x => x.name || hostLabel(x.origin);
+  const ident = x => x.name && x.name !== hostLabel(x.origin)
+    ? x.name + ' (' + hostLabel(x.origin) + ')' : hostLabel(x.origin);
+  const date = todayLocal();
+  const title = 'Core Web Vitals: ' + (multi
+    ? (competitors.length > 1 ? label(subject) + ' and ' + competitors.length + ' competitors'
+       : label(subject) + ' vs ' + label(competitors[0]))
+    : label(subject));
+
+  const findings = instantFindings(sites, results);
+  const sv = sd && sd.hasData ? cwvVerdict(sd.metrics) : null;
+  const thesis = !sv
+    ? 'Chrome holds too few real visits to ' + label(subject) + ' to assess it. That is a statement about traffic volume, not about speed.'
+    : (sv.state === 'pass'
+        ? label(subject) + ' passes Core Web Vitals on real traffic' + (multi ? ', measured against ' + competitors.length + ' competitor' + (competitors.length === 1 ? '' : 's') : '') + '. '
+        : label(subject) + ' fails Core Web Vitals on real traffic: it ' + sv.why + '. ') +
+      (findings.length ? findings[0].title + '.' : '');
+
+  const secs = []; let sn = 0;
+  const sec = (t, deck, body) => { secs.push({ n: sn++, title:t, deck, body }); };
+
+  sec('Method', 'What this measures, and what it cannot tell you.',
+    '<h3>Source</h3><p>The Chrome User Experience Report: 28 days of real Chrome visits to these origins, on real devices and real connections. This is the dataset Google\'s Core Web Vitals assessment is computed from, and the only one in which the numbers have consequences for ranking.</p>' +
+    '<h3>Scope</h3>' + kvTable(
+      [['Subject', ident(subject)]]
+      .concat(multi ? [['Compared against', competitors.map(ident).join(', ')]] : [])
+      .concat([
+        ['Level', 'Origin, all pages combined'],
+        ['Form factors', 'Phone and desktop, assessed separately'],
+        ['Window', (sd && sd.period) ? sd.period : '28 days, rolling'],
+        ['Report date', date]
+      ])) +
+    '<h3>What this is not</h3><p>Field data says what real visitors experienced. It cannot say which file caused it. There are no per-file findings, byte savings or platform-specific fixes in this document, because those come from a Lighthouse audit of individual pages. This is the diagnosis; that is the prescription.</p>' +
+    '<div class="callout"><b>An origin with no data is not a slow origin.</b> Chrome only reports where it has enough visits to be statistically sound. A missing site here has too little traffic, which is a finding about reach rather than about speed.</div>');
+
+  sec('The verdict', 'Core Web Vitals passes only when all three are inside the good band.',
+    tableHTML(['Site','Phone','Desktop','LCP','INP','CLS'],
+      sites.map((x, i) => {
+        const d = results[i];
+        if(!d || !d.hasData) return [ident(x) + (i === 0 ? ' \u2014 subject' : ' \u2014 competitor'),
+          'No data','No data','\u2013','\u2013','\u2013'];
+        const v = cwvVerdict(d.metrics);
+        const dv = d.desktop && d.desktop.hasData ? cwvVerdict(d.desktop.metrics) : null;
+        const m = k => d.metrics[k] ? fmt(k, d.metrics[k].p75) +
+          (d.metrics[k].good != null ? ' (' + Math.round(d.metrics[k].good * 100) + '% good)' : '') : '\u2013';
+        return [ident(x) + (i === 0 ? ' \u2014 subject' : ' \u2014 competitor'),
+                v.state === 'pass' ? 'Pass' : v.state === 'fail' ? 'Fail' : 'Not assessed',
+                dv ? (dv.state === 'pass' ? 'Pass' : dv.state === 'fail' ? 'Fail' : 'Not assessed') : 'No data',
+                m('lcp'), m('inp'), m('cls')];
+      })) +
+    '<p class="muted">The percentage is the share of real visits inside the good band. A p75 that just clears the threshold while a third of visits sit in the poor bin is still a bad experience for that third.</p>');
+
+  /* The section that justifies the whole fast lane. */
+  const anat = sites.map((x, i) => {
+    const d = results[i];
+    const parts = (d && d.lcpParts || []).filter(q => q.id);
+    if(!parts.length || !d.lcpTotal) return '';
+    const worst = parts.slice().sort((a, b) => b.share - a.share)[0];
+    return '<h3>' + E(label(x)) + '</h3>' +
+      '<p>' + E(fmtMs(d.lcpTotal)) + ' of LCP, split ' +
+      parts.map(q => E(q.label.toLowerCase() + ' ' + fmtMs(q.ms) + ' (' + Math.round(q.share * 100) + '%)')).join(', ') + '. ' +
+      '<b>' + E(worst.label) + ' is the largest share.</b> ' + E(worst.fix) + '</p>' +
+      (i === 0
+        ? tableHTML(['Phase','Time','Share of LCP','What it means'],
+            parts.map(q => [q.label, fmtMs(q.ms), Math.round(q.share * 100) + '%', q.fix]))
+        : '');
+  }).filter(Boolean).join('');
+  if(anat){
+    const cmpParts = sites.map((x, i) => ({ x, i, d: results[i] }))
+      .filter(o => o.i > 0 && o.d && o.d.lcpTotal && (o.d.lcpParts || []).length);
+    const cmpTable = cmpParts.length
+      ? '<h3>Side by side</h3><p class="muted">The same split for every site with data, so a phase that is a problem everywhere can be told apart from one that is a problem here.</p>' +
+        tableHTML(['Site','LCP'].concat(LCP_PARTS.map(q => q.label)),
+          sites.map((x, i) => {
+            const d = results[i];
+            if(!d || !d.lcpTotal || !(d.lcpParts || []).length) return null;
+            const by = {}; (d.lcpParts || []).forEach(q => { by[q.id] = q; });
+            return [label(x) + (i === 0 ? ' \u2014 subject' : ''), fmtMs(d.lcpTotal)]
+              .concat(LCP_PARTS.map(q => by[q.id]
+                ? fmtMs(by[q.id].ms) + ' (' + Math.round(by[q.id].share * 100) + '%)' : '\u2013'));
+          }).filter(Boolean))
+      : '';
+    sec('What LCP is made of', 'Which quarter of the problem to fix, and therefore who fixes it.',
+      '<p>Largest Contentful Paint is a sum of four phases. A single number says the page is slow; the split says why, and the four phases have four different owners. A lab audit infers this from one synthetic load. These are real visits.</p>' +
+      anat + cmpTable +
+      (results[0] && results[0].lcpType
+        ? '<div class="callout"><b>On ' + E(Math.round(results[0].lcpType.share * 100)) + '% of visits the largest element on ' +
+          E(label(subject)) + ' is ' + (results[0].lcpType.type === 'image' ? 'an image' : 'text') + '.</b>' +
+          (results[0].lcpType.type === 'image'
+            ? ' Compression, format and sizing work on that image moves this number directly, and the four phases above say which of those it is.'
+            : ' Image compression and format work will not move LCP here. Font loading and render-blocking resources will.') +
+          '</div>' : ''));
+  }
+
+  const trendRows = [];
+  sites.forEach((x, i) => {
+    const d = results[i]; if(!d || !d.trend) return;
+    for(const k of CWV_CORE){
+      const t = d.trend[k]; if(!Array.isArray(t) || t.length < 3) continue;
+      const first = t[0], last = t[t.length - 1];
+      if(first == null || last == null) continue;
+      const dir = last > first * 1.05 ? 'Worse' : last < first * 0.95 ? 'Better' : 'Flat';
+      trendRows.push([label(x), METRICS[k].label, fmt(k, first), fmt(k, last), dir, String(t.length)]);
+    }
+  });
+  if(trendRows.length){
+    sec('Direction', 'Where these numbers have been going, which a lab score cannot say.',
+      '<p>Each figure is the 75th percentile at the end of a 28-day window, one row per metric per site, over up to 40 weekly periods. A site that was inside the threshold six months ago and is not now has a cause with a date on it, which is a much narrower thing to look for than general slowness.</p>' +
+      tableHTML(['Site','Metric','Earliest','Latest','Direction','Periods'], trendRows));
+  }
+
+  sec('Findings', 'Generated from the measurements by a fixed rule set.',
+    findings.length
+      ? findings.map((f, i) => '<article class="card"><div class="cardhead"><span class="num">' +
+          E((sn) + '.' + (i + 1)) + '</span><h3>' + E(f.title) + '</h3></div>' +
+          '<div class="pills"><span class="pill" style="background:' + SEV_PILL[f.sev].bg + ';color:' +
+          SEV_PILL[f.sev].fg + ';border-color:' + SEV_PILL[f.sev].bd + '">' + E(SEV_PILL[f.sev].label) + '</span></div>' +
+          '<p class="lede">' + E(f.body) + '</p></article>').join('')
+      : '<p>Nothing in the field data crosses a reporting threshold.</p>');
+
+  sec('What comes next', 'The questions this document cannot answer.',
+    '<p>Field data names the problem and its shape. It does not name the file. A Lighthouse audit of individual pages adds:</p>' +
+    '<ul><li>The specific resources responsible, with their sizes and the time each costs a page.</li>' +
+    '<li>Byte savings per fix, expressed as seconds on four connection speeds.</li>' +
+    '<li>Platform-specific routes, since the fix for an unoptimised image differs on Webflow, WordPress and Shopify.</li>' +
+    '<li>SEO and accessibility checks across a sample of pages.</li>' +
+    '<li>Like-for-like comparison of equivalent page types across sites.</li></ul>' +
+    '<div class="callout"><b>This document took about a second to produce.</b> The audit above it takes a few minutes, because every page in it is really loaded and really measured on Google\'s hardware. They answer different questions and the second one is worth the wait.</div>');
+
+  const contents = secs.map(x => '<li><span class="cn">' + x.n + '</span><span class="ct">' + E(x.title) + '</span></li>').join('');
+  const coverMeta = [['Subject', ident(subject)]]
+    .concat(multi ? [['Compared against', competitors.map(ident).join(', ')]] : [])
+    .concat([['Source', 'Chrome User Experience Report'],
+             ['Prepared by', 'Jake Labate, SEO Consultant'],
+             ['Window', (sd && sd.period) ? sd.period : '28 days, rolling'],
+             ['Date', date]]);
+
+  return '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n' +
+    '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
+    '<title>' + E(title + ' ' + date) + '</title>\n' +
+    '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n' +
+    '<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">\n' +
+    '<style>' + REPORT_CSS + '</style>\n</head>\n<body>\n' +
+    '<div class="printbar"><button type="button" onclick="window.print()">Save as PDF</button>' +
+    '<span>Not printed.</span></div>' +
+    '<script>document.body.classList.add("hasbar");<\/script>' +
+    '<section class="cover"><div class="badge">Deliverable</div>' +
+    '<div class="covertop"><div class="eyebrow light">Core Web Vitals, real users</div>' +
+    '<h1>' + E(title) + '</h1>' +
+    '<p class="onelinethesis">' + E(thesis) + '</p></div>' +
+    '<div class="covermeta">' + coverMeta.map(([k, v]) =>
+      '<div class="mrow"><span class="mk">' + E(k) + '</span><span class="mv">' + E(v) + '</span></div>').join('') +
+    '</div></section>' +
+    '<section class="page contents"><div class="eyebrow">Contents</div><ol class="toc">' + contents + '</ol></section>' +
+    secs.map(x => '<section class="page"><div class="rule"></div><div class="eyebrow">Section ' + x.n + '</div>' +
+      '<h2>' + E(x.title) + '</h2><p class="deck">' + E(x.deck) + '</p>' + x.body + '</section>').join('') +
+    '\n</body>\n</html>\n';
+}
+
 function renderReportHTML(m){
   const meta = m.meta;
   const E = esc;
@@ -6685,7 +7072,6 @@ function cruxCardHTML(site, data, primary){
 }
 
 async function runInstant(){
-  const key = $('#key').value.trim();
   const entries = siteEntries().map(e => ({ name: e.name, origin: originOf(e.url) })).filter(e => e.origin);
   const seen = new Set();
   const sites = entries.filter(e => !seen.has(e.origin) && seen.add(e.origin));
@@ -6694,11 +7080,9 @@ async function runInstant(){
     $('#setupErr').innerHTML = '<div class="err">Enter at least one valid site URL, for example https://example.com</div>';
     return;
   }
-  if(!key){
-    $('#setupErr').innerHTML = '<div class="err">The Chrome UX Report API needs your API key. Add it above, and make sure the ' +
-      '<b>Chrome UX Report API</b> is enabled on the same Google Cloud project as your PageSpeed key.</div>';
-    return;
-  }
+  /* Two calls per origin per form factor, current period and history. */
+  const route = await routeFor('crux', sites.length * 4, '#setupErr');
+  if(!route){ $('#key').focus(); return; }
   siteInputs().forEach((inp, i) => { if(sites[i]) inp.value = sites[i].origin; });
   saveSites();
 
@@ -6717,7 +7101,7 @@ async function runInstant(){
     const jobs = [];
     sites.forEach(s => ['PHONE','DESKTOP'].forEach(ff => jobs.push({ s, ff })));
     const raw = await Promise.all(jobs.map(j =>
-      cruxForOrigin(j.s.origin, j.ff, key).catch(e => ({ origin: j.s.origin, formFactor: j.ff, hasData: false, error: e.message }))));
+      cruxForOrigin(j.s.origin, j.ff, route).catch(e => ({ origin: j.s.origin, formFactor: j.ff, hasData: false, error: e.message }))));
     const byOrigin = new Map();
     raw.forEach(r => {
       if(!byOrigin.has(r.origin)) byOrigin.set(r.origin, {});
@@ -6754,12 +7138,105 @@ async function runInstant(){
         '<br><br>If this says the API is not enabled, turn on the <b>Chrome UX Report API</b> in the same Google Cloud ' +
         'project as your PageSpeed key.</div>' : '');
     $('#instantStat').textContent = withData + ' of ' + sites.length + ' with field data \u00b7 ' + fmtSecs(ms);
+    ['#instantReport','#instantJson','#instantCsv'].forEach(id =>
+      $(id).classList.toggle('hidden', withData === 0));
     $('#instantCard').scrollIntoView({ behavior:'smooth', block:'start' });
   }catch(e){
     $('#instantBody').innerHTML = '<div class="err">Could not read the Chrome UX Report: ' + esc(e.message) + '</div>';
     $('#instantStat').textContent = 'failed';
   }finally{ btn.disabled = false; btn.textContent = was; }
 }
+/* Same three shapes the full audit produces, from the fast lane: the document
+   you send, and the data behind it. */
+function instantSlug(){
+  const st = state.instant;
+  if(!st || !st.sites.length) return 'site';
+  const base = (st.sites[0].name || hostLabel(st.sites[0].origin)).replace(/[^a-z0-9]+/gi,'-').replace(/^-|-$/g,'');
+  return st.sites.length > 1 ? base + '-vs-' + (st.sites.length - 1) : base;
+}
+function instantRows(){
+  const st = state.instant; if(!st) return [];
+  const rows = [];
+  st.sites.forEach((site, i) => {
+    const d = st.results[i];
+    ['phone','desktop'].forEach(ff => {
+      const f = d && d[ff];
+      if(!f || !f.hasData) return;
+      const v = cwvVerdict(f.metrics);
+      const row = {
+        site: site.name || hostLabel(site.origin),
+        host: hostLabel(site.origin), origin: site.origin,
+        role: i === 0 ? 'subject' : 'competitor',
+        form_factor: ff, cwv_verdict: v.state, cwv_detail: v.why,
+        collection_period: f.period || ''
+      };
+      CRUX_FIELDS.forEach(k => {
+        const m = f.metrics[k];
+        row[k + '_p75'] = m && m.p75 != null ? r2(m.p75) : '';
+        row[k + '_good_share'] = m && m.good != null ? r2(m.good) : '';
+        row[k + '_poor_share'] = m && m.poor != null ? r2(m.poor) : '';
+      });
+      (f.lcpParts || []).filter(x => x.id).forEach(x => {
+        row['lcp_' + x.id + '_ms'] = Math.round(x.ms || 0);
+        row['lcp_' + x.id + '_share'] = r2(x.share);
+      });
+      if(f.lcpType) row.lcp_resource_type = f.lcpType.type;
+      if(f.nav && f.nav.back_forward_cache != null) row.bfcache_share = r2(f.nav.back_forward_cache);
+      rows.push(row);
+    });
+  });
+  return rows;
+}
+$('#instantCsv').addEventListener('click', () => {
+  const rows = instantRows(); if(!rows.length) return;
+  const head = Array.from(rows.reduce((acc, r) => { Object.keys(r).forEach(k => acc.add(k)); return acc; }, new Set()));
+  const q = v => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g,'""') + '"' : t; };
+  download('core-web-vitals-' + instantSlug() + '.csv',
+    [head.join(',')].concat(rows.map(r => head.map(h => q(r[h])).join(','))).join('\n'), 'text/csv');
+});
+$('#instantJson').addEventListener('click', () => {
+  const st = state.instant; if(!st) return;
+  download('core-web-vitals-' + instantSlug() + '.json', JSON.stringify({
+    source: 'Chrome User Experience Report',
+    note: 'Origin-level field data: 28 days of real Chrome visits. Core Web Vitals passes only when LCP, INP and CLS are all inside the good band at p75. The lcp_* subparts decompose LCP into server response, discovery delay, image download and render delay.',
+    generated_at: st.at, query_ms: st.ms,
+    thresholds: Object.fromEntries(CRUX_FIELDS.map(k => [k, { good: METRICS[k].good, needs_work_until: METRICS[k].ni }])),
+    sites: st.sites.map((site, i) => {
+      const d = st.results[i];
+      return { name: site.name || null, host: hostLabel(site.origin), origin: site.origin,
+               role: i === 0 ? 'subject' : 'competitor',
+               has_field_data: !!(d && d.hasData),
+               phone: (d && d.phone) || null, desktop: (d && d.desktop) || null };
+    }),
+    findings: instantFindings(st.sites, st.results),
+    rows: instantRows()
+  }, null, 2), 'application/json');
+});
+$('#instantReport').addEventListener('click', () => {
+  const st = state.instant; if(!st) return;
+  const btn = $('#instantReport'); const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Generating…';
+  try{
+    const html = instantReportHTML(st.sites, st.results);
+    const url = URL.createObjectURL(new Blob([html], { type:'text/html' }));
+    const w = window.open(url, '_blank');
+    if(!w){
+      $('#instantBody').insertAdjacentHTML('afterbegin',
+        '<div class="err"><b>The report window was blocked.</b> Allow pop-ups and press Report again, or ' +
+        '<a href="' + url + '" target="_blank" rel="noopener">open it</a> and press Save as PDF inside it.</div>');
+    } else {
+      const go = () => { try{
+        const ready = w.document.fonts && w.document.fonts.ready ? w.document.fonts.ready : Promise.resolve();
+        ready.then(() => setTimeout(() => { try{ w.focus(); w.print(); }catch(e){} }, 350));
+      }catch(e){ setTimeout(() => { try{ w.print(); }catch(e2){} }, 1200); } };
+      if(w.document && w.document.readyState === 'complete') go(); else w.addEventListener('load', go);
+    }
+    setTimeout(() => URL.revokeObjectURL(url), 600000);
+  }catch(e){
+    $('#instantBody').insertAdjacentHTML('afterbegin', '<div class="err">Could not build the report: ' + esc(e.message) + '</div>');
+  }finally{ btn.disabled = false; btn.textContent = was; }
+});
+
 $('#instantBtn').addEventListener('click', () => { runInstant(); });
 $('#instantDeepen').addEventListener('click', () => startFromSetup(true));
 
@@ -6806,6 +7283,9 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
     sites.slice(0, MAX_SITES).forEach((v, i) => addSiteRow(v, names[i] || ''));
   }
   if(q.get('key')) $('#key').value = q.get('key');
+  /* Say what is free before the visitor decides whether they need a key. */
+  $('#key').addEventListener('input', showBudget);
+  backend.probe().then(showBudget);
 })();
 </script>
 </body>

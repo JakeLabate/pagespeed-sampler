@@ -42,10 +42,10 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 <p class="eyebrow">PageSpeed Sampler</p>
 <h1>How it works</h1>
 <p class="lead">Every stage a site passes through, what it falls back to when a stage fails, and the three points where the pipeline loops back on itself.</p>
-<p class="updated">Six phases. Everything runs in the browser; there is no server anywhere in this diagram.</p>
+<p class="updated">An instant read, then six phases. The interface and all of the analysis run in the browser. The only server is a small proxy that fetches sitemaps and, unless you supply your own API key, makes the metered calls to Google on your behalf.</p>
 </div>
 
-<div class="toc"><p class="h">On this page</p><ol><li><a href="#phase-1-discover">Phase 1 · Discover</a></li><li><a href="#phase-2-shape">Phase 2 · Shape</a></li><li><a href="#phase-3-sample">Phase 3 · Sample</a></li><li><a href="#phase-4-measure">Phase 4 · Measure</a></li><li><a href="#phase-5-interpret">Phase 5 · Interpret</a></li><li><a href="#phase-6-deliver">Phase 6 · Deliver</a></li><li><a href="#what-this-does-not-do">What this does not do</a></li></ol></div>
+<div class="toc"><p class="h">On this page</p><ol><li><a href="#phase-0-instant">Phase 0 &middot; Instant read</a></li><li><a href="#phase-1-discover">Phase 1 · Discover</a></li><li><a href="#phase-2-shape">Phase 2 · Shape</a></li><li><a href="#phase-3-sample">Phase 3 · Sample</a></li><li><a href="#phase-4-measure">Phase 4 · Measure</a></li><li><a href="#phase-5-interpret">Phase 5 · Interpret</a></li><li><a href="#phase-6-deliver">Phase 6 · Deliver</a></li><li><a href="#what-this-does-not-do">What this does not do</a></li></ol></div>
 <figure>
 <svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to a dedicated proxy to public proxies to twenty-two common sitemap paths. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
   <defs>
@@ -140,6 +140,18 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 </svg>
 <figcaption>Solid arrows are the happy path. Dashed grey is what happens when a stage fails. Teal is a loop back into an earlier stage, or a side input that changes what a later stage says.</figcaption>
 </figure>
+
+<h2 id="phase-0-instant">Phase 0 &middot; Instant read<a class="anchor" href="#phase-0-instant" aria-label="Link to this section">#</a></h2>
+<div class="phase">
+<p>The six phases below are a page load repeated a few hundred times, and no amount of batching makes a page load instant. Before any of it runs, the tool asks a different question of a different API, and that one is a lookup rather than a load.</p>
+<p>The <b>Chrome UX Report API</b> holds 28 days of real Chrome visits per origin. Four calls per site fire together: current and historical, phone and desktop. Every site in the list is queried in the same burst, so the wall clock is one round trip whatever the site count. It returns in about a second.</p>
+<div class="scroller"><table>
+<tr><th>What it gives</th><td>The Core Web Vitals verdict on real traffic, the full distribution behind each p75, 25 periods of trend, phone and desktop assessed separately, the four LCP phases, whether the LCP element is usually an image, real round-trip time, and the share of navigations served from the back/forward cache.</td></tr>
+<tr><th>What it cannot give</th><td>Which file caused it. Field data is origin-level and has no per-resource detail, so every opportunity, byte saving and platform-specific fix still needs phases 1 to 6.</td></tr>
+<tr><th>When it is empty</th><td>Chrome only publishes where it has enough visits to be statistically sound. No data is a fact about traffic volume, not about speed, and the card says so rather than leaving a gap.</td></tr>
+</table></div>
+<p>This phase produces a complete deliverable set of its own, described in phase 6. The full run is offered from the same card and starts at phase 1.</p>
+</div>
 
 <h2 id="phase-1-discover">Phase 1 · Discover<a class="anchor" href="#phase-1-discover" aria-label="Link to this section">#</a></h2>
 <div class="phase">
@@ -284,6 +296,15 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 
 <h2 id="phase-6-deliver">Phase 6 · Deliver<a class="anchor" href="#phase-6-deliver" aria-label="Link to this section">#</a></h2>
 <div class="phase">
+<p>Two sets, produced at two different times from two different sources. The instant set lands about a second after the key is entered and answers whether there is a problem and what shape it is. The full set lands minutes later and answers which file causes it and what the fix is worth.</p>
+<h3>Instant set, from the field data</h3>
+<div class="scroller"><table>
+<tr><th>Card</th><td>One panel per site: the verdict, the distribution behind each p75, the desktop line, the LCP anatomy, the back/forward cache share and a trend sparkline.</td></tr>
+<tr><th>CSV</th><td>One row per site per form factor, 36 columns: p75, good share and poor share for all six metrics, the four LCP subparts in milliseconds and as shares, the LCP resource type and the bfcache share.</td></tr>
+<tr><th>JSON</th><td>The same, nested, with the thresholds and the full trend series.</td></tr>
+<tr><th>Report</th><td>Print-ready document in six sections: method, the verdict, what LCP is made of, direction, findings, and what comes next.</td></tr>
+</table></div>
+<h3>Full set, from the audits</h3>
 <p>Six outputs, all built from the same model so none of them can drift from the others:</p>
 <div class="scroller"><table>
 <tr><th>App</th><td>An operator console. Run validity, comparison, headline figures, real-user data and ranked opportunities stay on screen; the reference material collapses behind disclosures that carry their own headline number. The reports are where the full detail belongs.</td></tr>

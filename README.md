@@ -1,6 +1,6 @@
 # PageSpeed Sampler
 
-A single-file, front-end-only tool that finds a site's sitemap, samples a representative
+A single-file browser tool that finds a site's sitemap, samples a representative
 set of URLs across its collection types, measures each one with the Google PageSpeed
 Insights API, and reports the averages. Add up to four sites and it benchmarks them
 against each other.
@@ -74,6 +74,36 @@ wall clock is one round trip whatever the site count.
 
 Needs the **Chrome UX Report API** enabled on the same Google Cloud project as the
 PageSpeed key. Same key, no OAuth. Its quota is separate: 150 queries a minute.
+
+### Two sets of deliverables
+
+The instant lane is not a teaser for the full one. It ships its own complete set, so
+there is something client-ready in hand about a second after the key is entered, and a
+second, larger set a few minutes later.
+
+| | Instant | Full |
+|---|---|---|
+| Time to deliverables | About one second | Two to twenty minutes, depending on page count |
+| Source | Chrome UX Report, 28 days of real visits | Lighthouse via PageSpeed Insights, one synthetic load per page |
+| Level | Origin, all pages combined | Individual URLs, sampled per collection |
+| Report | Core Web Vitals PDF, six sections | PageSpeed audit PDF, up to nineteen sections |
+| Spreadsheet | CSV, one row per site per form factor | Excel workbook and Google Sheet, nineteen tabs |
+| JSON | Every p75, distribution share, LCP subpart and trend | Every audit, opportunity, resource and finding |
+| Answers | Whether it is a problem, and what shape the problem is | Which file causes it and what the fix is worth |
+
+The instant report carries a cover, contents and six sections: Method, The verdict, What
+LCP is made of, Direction, Findings, and What comes next. Findings come from the same
+kind of fixed rule set the full report uses, over the field data rather than over the
+audits: a dominant LCP phase, a non-image LCP element, a phone/desktop divergence, a
+metric trending the wrong way over 25 periods, a low back/forward cache share, and a
+competitor passing where the subject fails. Each names the measurement that triggered it.
+
+Both reports print to PDF from the browser, so text stays selectable and the charts stay
+vector. Neither is written by a language model.
+
+The instant CSV is one row per site per form factor with 36 columns: the p75, good share
+and poor share for all six metrics, the four LCP subparts in milliseconds and as shares,
+the LCP resource type, and the back/forward cache share. It is the shape that pivots.
 
 ### What is deliberately not here
 
@@ -576,14 +606,43 @@ completes 76 of 76 calls, wasting 28 requests learning where the wall is.
 
 ## API key
 
-The PageSpeed Insights API is free but rate limited. Without a key Google allows only a
-trickle of requests and most of a 100-URL run will fail, so get one from the
-[PSI getting-started guide](https://developers.google.com/speed/docs/insights/v5/get-started#key)
-(enable the "PageSpeed Insights API" in a Google Cloud project). With a key you get
-25,000 requests/day and 240/minute.
+**You do not need one.** The key field is optional and blank by default. Runs go
+through a Cloudflare Worker that holds the keys, meters what each visitor spends
+per day, and never lets a key reach a browser. The setup card says how much is
+left before anything is spent. `worker/` holds that Worker, its tests and its
+deploy steps; `CONFIG.apiBase` points the app at it, and setting that to `''`
+reverts the app to requiring every visitor to bring their own key.
 
-The key is stored in `localStorage` in your own browser and is sent only to
-`pagespeedonline.googleapis.com`. There is no backend.
+Add your own key to go past the free allowance, or to measure a site large
+enough to exceed it. A key in the field always wins: the run goes straight to
+Google, skips the Worker and the metering entirely, and spends the visitor's own
+quota rather than the shared one. Get one from the
+[PSI getting-started guide](https://developers.google.com/speed/docs/insights/v5/get-started#key)
+(enable the "PageSpeed Insights API" in a Google Cloud project) for 25,000
+requests a day and 240 a minute. It is stored in `localStorage` in your own
+browser and sent only to `pagespeedonline.googleapis.com`.
+
+### When the free allowance runs out
+
+The run stops before it measures anything, rather than halfway through, and says
+how much is left, when it resets, and that pasting a key in the field above
+carries on now.
+
+### Why a reservation rather than counting calls
+
+A sweep asks for its whole call count up front and gets a signed, short-lived,
+IP-bound token. That is one write per sweep instead of one per call, which
+matters because Cloudflare's free KV plan allows 1,000 writes a day. It also
+means a visitor is refused before the run starts rather than mid-sweep.
+
+### The cache is the real capacity
+
+The Worker caches PageSpeed responses for six hours, keyed without the API key,
+so every visitor shares one cache. A site one person measured is free for the
+next, and competitor analysis measures popular sites repeatedly, so real
+capacity is higher than dividing the daily quota by the per-visitor cap
+suggests. It also makes a re-run inside that window reproducible, which is
+otherwise not true of Lighthouse.
 
 ## CORS
 
