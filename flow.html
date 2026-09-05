@@ -47,7 +47,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 
 <div class="toc"><p class="h">On this page</p><ol><li><a href="#phase-1-discover">Phase 1 · Discover</a></li><li><a href="#phase-2-shape">Phase 2 · Shape</a></li><li><a href="#phase-3-sample">Phase 3 · Sample</a></li><li><a href="#phase-4-measure">Phase 4 · Measure</a></li><li><a href="#phase-5-interpret">Phase 5 · Interpret</a></li><li><a href="#phase-6-deliver">Phase 6 · Deliver</a></li><li><a href="#what-this-does-not-do">What this does not do</a></li></ol></div>
 <figure>
-<svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to public proxies to twenty-two common sitemap paths to a manual URL list. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
+<svg viewBox="0 0 920 772" role="img" aria-label="Pipeline diagram. Six phases run top to bottom: discover, shape, sample, measure, interpret, deliver. Discovery falls back from a direct fetch to a dedicated proxy to public proxies to twenty-two common sitemap paths. Editing a collection pairing in the shape phase re-runs sampling. The measure phase loops on itself, halving an adaptive concurrency ceiling when errors cluster and climbing back on success, and falls back to retry sweeps. Stack detection feeds sideways into interpretation.">
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
       <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
@@ -103,7 +103,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
     </g>
     <text x="656" y="40" font-size="11" fill="#8a8890">blocked by CORS → 5 public proxies</text>
     <text x="656" y="63" font-size="11" fill="#8a8890">no robots directive → 22 known paths</text>
-    <text x="656" y="86" font-size="11" fill="#8a8890">nothing found → paste URLs by hand</text>
+    <text x="656" y="86" font-size="11" fill="#8a8890">nothing found → site is reported unreachable</text>
 
     <g stroke="#8a8890" stroke-width="1.2" stroke-dasharray="4 3" fill="none" marker-end="url(#ad)">
       <path d="M586,431 H648"/>
@@ -194,7 +194,7 @@ pre code{background:none;border:0;padding:0;font-size:inherit}
 <p>Where several hit, an index beats a leaf urlset, then the shallowest path wins.</p>
 
 <h3><span class="n">1.3</span>Walk it</h3>
-<p>A <code>&lt;sitemapindex&gt;</code> is walked breadth-first into its children, to a depth of five and a default ceiling of 30 child sitemaps. Plain-text sitemaps are parsed too. Gzipped sitemaps are skipped, because a browser cannot decompress them from <code>fetch</code>.</p>
+<p>A <code>&lt;sitemapindex&gt;</code> is walked breadth-first into its children, to a depth of eight. There is no cap on the number of child sitemaps: the wall-clock budget is the only ceiling that ever mattered, and a count cap stopped a walk that still had time left while letting a slow one run on. Plain-text sitemaps are parsed too. Gzipped sitemaps are skipped, because a browser cannot decompress them from <code>fetch</code>.</p>
 <p>The parallel pass fails fast at 16 seconds. Any child that timed out is then swept again <b>through different proxies, four at a time</b>, because a batch of timeouts usually means the proxy was saturated rather than the files being absent. Recovered children rejoin the inventory.</p>
 <p>A <b>wall-clock budget</b> (90 seconds by default, adjustable) bounds the whole walk, checked per sitemap rather than per depth level so a single index handing back twelve children cannot run past it. Whatever was collected when the budget expires is used.</p>
 <div class="fail"><b>If children fail permanently:</b> the site is reported as having <em>published a sitemap whose children timed out</em>, not as having published none. Those are different problems and pointed at different fixes. Where some children succeed, sampling proceeds on what was readable and the summary says the inventory is incomplete.</div>

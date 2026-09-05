@@ -180,7 +180,9 @@ tbody tr:hover{background:var(--surface-2)}
 .hidden{display:none !important}
 .grouphd{font-weight:640;font-size:13px}
 .siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px}
-.siterow input{flex:1}
+.siterow input.name{flex:0 1 150px;min-width:0}
+.siterow input.url{flex:1 1 220px;min-width:0}
+@media(max-width:620px){.siterow{flex-wrap:wrap}.siterow input.name,.siterow input.url{flex:1 1 100%}}
 .siterow .num{width:20px;flex:none;font-size:11px;font-weight:700;color:var(--muted);text-align:center}
 .siterow .role{flex:none;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.08em;
   text-transform:uppercase;color:var(--muted);min-width:74px;text-align:right}
@@ -294,7 +296,12 @@ footer .by{margin-left:auto}
       <label class="f">Sites</label>
       <div id="siteList"></div>
       <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
-      <div class="hint">Domain or any page on the site; the sitemap is looked up from its origin. Add up to four. <b>The first site is the primary one</b>: the report is about it, and every other site is measured against it as a competitor. To change which is primary, retype them in the order you want.</div>
+      <div class="hint">A name and a URL for each site. The name is what the reports lead with, so
+        <b>jakelabate.com</b> can read as <b>Jake Labate</b>; leave it blank and the domain is used. The URL can be
+        the domain or any page on it, and the sitemap is looked up from its origin. Add up to four.
+        <b>The first site is the primary one</b>: the report is about it and every other site is measured against it
+        as a competitor. It cannot be removed, since a run needs a site to be about. To change which is primary,
+        retype them in the order you want.</div>
     </div>
     <div>
       <label class="f" for="key">PageSpeed Insights API key</label>
@@ -325,21 +332,6 @@ footer .by{margin-left:auto}
           <div class="hint">A single Lighthouse run swings several points between identical executions. More runs cost proportionally more quota and give a per-page number you can defend when a client re-runs it.</div>
         </div>
         <div>
-          <label class="f" for="conc">Batching</label>
-          <select id="conc">
-            <option value="0" selected>All at once</option>
-            <option value="32">32 at a time</option>
-            <option value="16">16 at a time</option>
-            <option value="8">8 at a time</option>
-            <option value="4">4 at a time</option>
-          </select>
-          <div class="hint">Calls run concurrently up to this width. The run opens at 40 in flight and climbs or backs off on its own, since Google's Lighthouse pool, not the 240/min quota, is the real ceiling.</div>
-        </div>
-        <div>
-          <label class="f" for="maxChild">Max child sitemaps</label>
-          <input type="number" id="maxChild" value="30" min="1" max="100">
-        </div>
-        <div>
           <label class="f" for="budget">Discovery budget a site</label>
           <input type="number" id="budget" value="90" min="20" max="600"> 
           <div class="hint">Seconds. Whatever else happens, discovery for one site ends here and the run continues on whatever was collected.</div>
@@ -354,21 +346,11 @@ footer .by{margin-left:auto}
           </select>
           <div class="hint">Median by default: one catastrophic page should not decide which collection gets named the weakest. The other is always shown beside it.</div>
         </div>
-        <div>
-          <label class="f">Sitemap fetch</label>
-          <div style="padding-top:5px"><label class="chk"><input type="checkbox" id="useProxy" checked> Allow public CORS proxies</label></div>
-          <div class="hint">Direct fetch is tried first; proxies only if the site blocks it.</div>
-        </div>
       </div>
       <div style="margin-top:12px">
         <label class="f" for="clientName">Client or project name (report cover)</label>
         <input type="text" id="clientName" placeholder="Acme Inc" spellcheck="false">
         <div class="hint">Appears on the report cover and the method tab. Prepared-by line is fixed to Jake Labate, SEO Consultant.</div>
-      </div>
-      <div style="margin-top:14px">
-        <label class="f" for="manual">Manual URL list (fallback or addition)</label>
-        <textarea id="manual" placeholder="https://example.com/&#10;https://example.com/about&#10;https://example.com/contact" spellcheck="false"></textarea>
-        <div class="hint">One URL per line. Used on its own if discovery fails, or merged in if discovery works. Applies per site: paste URLs for several sites and each takes only its own.</div>
       </div>
     </div>
   </details>
@@ -376,7 +358,6 @@ footer .by{margin-left:auto}
   <div class="btnrow" style="margin-top:16px">
     <button class="btn" id="sweepBtn" type="button">Find pages and run</button>
     <button class="btn ghost sm" id="discoverBtn" type="button">Find sitemaps only</button>
-    <button class="btn ghost sm" id="manualOnlyBtn" type="button">Use manual list only</button>
     <button class="btn ghost sm hidden" id="stopDiscover" type="button">Stop searching</button>
   </div>
   <div id="setupErr"></div>
@@ -505,13 +486,13 @@ function todayLocal(){
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate());
 }
 
-const PERSIST = ['#key','#perGroup','#totalCap','#conc','#maxChild','#budget','#clientName','#repeats'];
+const PERSIST = ['#key','#perGroup','#totalCap','#budget','#clientName','#repeats'];
 PERSIST.forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.value = v;
   n.addEventListener('change', () => localStorage.setItem(k, n.value));
 });
-['#useProxy'].forEach(sel => {
+[].forEach(sel => {
   const n = $(sel), k = 'pss' + sel;
   const v = localStorage.getItem(k); if(v !== null) n.checked = v === '1';
   n.addEventListener('change', () => localStorage.setItem(k, n.checked ? '1' : '0'));
@@ -1017,7 +998,7 @@ async function discover(origin, opts, log, ctx){
   const walked = [];
   const failed = [];
   let depth = 0;
-  while(queue.length && walked.length < opts.maxChild && depth < 5){
+  while(queue.length && depth < 8){
     if(state.cancel){ queue.forEach(x => failed.push(x)); break; }
     if(outOfTime()){
       logLine(log, '  stopping the walk: ' + Math.round((opts.budgetMs || 90000) / 1000) +
@@ -1026,7 +1007,7 @@ async function discover(origin, opts, log, ctx){
       break;
     }
     depth++;
-    const batch = queue.filter(u => !seenSitemaps.has(u)).slice(0, opts.maxChild - walked.length);
+    const batch = queue.filter(u => !seenSitemaps.has(u));
     batch.forEach(u => seenSitemaps.add(u));
     queue = [];
     /* Nine at a time is safe across three working proxies and abusive against
@@ -1071,7 +1052,7 @@ async function discover(origin, opts, log, ctx){
     }
     if(found.length > 20000){ logLine(log, '  URL cap reached (20,000)', 'dim'); break; }
   }
-  if(queue.length) logLine(log, '  ' + queue.length + ' further child sitemaps skipped (max child sitemaps = ' + opts.maxChild + ')', 'dim');
+  if(queue.length) logLine(log, '  ' + queue.length + ' further child sitemaps not reached before the budget ran out', 'dim');
 
   /* A child that timed out is slow, not missing. Retry the failures one at a
      time with a wide window before writing them off, because a batch of them
@@ -1439,12 +1420,28 @@ function normalise(list, origin){
     seen.add(key);
     out.push({
       url: href, path: u.pathname, lastmod: item.lastmod || null, source: item.source || null,
-      key: keyPageType(href), site: origin, siteLabel: hostLabel(origin), collection: null
+      key: keyPageType(href), site: origin, siteLabel: siteLabelFor(origin), collection: null
     });
   }
   return out.sort((a,b) => a.path.localeCompare(b.path));
 }
+/* A name is what a reader recognises; the domain is what makes the figure
+   checkable. Charts and column headers get the name alone because space is
+   scarce and the legend is nearby; anything that identifies a site for the
+   record gets both. */
+function siteIdent(site){
+  if(!site) return '';
+  const host = site.host || hostLabel(site.origin || '');
+  return site.name && site.name !== host ? site.name + ' (' + host + ')' : host;
+}
 function hostLabel(origin){ try{ return new URL(origin).host.replace(/^www\./,''); }catch(e){ return origin; } }
+/* Once a run has started, the site list is the authority on what a site is
+   called; before that, fall back to whatever the setup form holds. */
+function siteLabelFor(origin){
+  const s = (state.sites || []).find(x => x.origin === origin);
+  if(s) return s.label;
+  try{ return nameForUrl(origin) || hostLabel(origin); }catch(e){ return hostLabel(origin); }
+}
 
 /* ------------------------------------------------------- locale prefixes */
 /* Grouping on the first path segment turns every multilingual site into one
@@ -2604,8 +2601,10 @@ async function runTest(){
   }
 
   const t0 = Date.now();
-  const chosen = parseInt($('#conc').value, 10) || 0;
-  const burst = chosen > 0 ? chosen : allJobs.length;   // 0 = fire everything in one tick
+  /* The limiter derives its width from observed latency, halves it when errors
+     cluster, and climbs back on success. A field asking the operator to pick a
+     number could only override that with a worse one. */
+  const burst = allJobs.length;
   limiter.reset(230, burst);
 
   const ticker = setInterval(() => {
@@ -4445,7 +4444,8 @@ function buildReportModel(){
   /* 0 Method. Context and Sources are the two sections Jake's audit template
      always carries, so they lead. */
   const params = [
-    ['Sites measured', state.sites.map(s => s.origin).join(', ')],
+    ['Sites measured', state.sites.map(x =>
+      siteIdent(x) + ' \u2014 ' + x.origin + (x.primary ? ' (subject)' : ' (competitor)')).join('; ')],
     ['Sampling', 'Up to ' + clampInt($('#perGroup').value,1,10,10) + ' URLs per collection, ' +
                  clampInt($('#totalCap').value,1,100,100) + ' per site maximum'],
     ['Strategies', strategies.join(' and ')],
@@ -4662,7 +4662,7 @@ function buildReportModel(){
       for(const site of state.sites){
         const rs = ok.filter(r => r.strategy === strat && r.site === site.origin);
         if(!rs.length) continue;
-        rows.push([strat, site.label + (site.primary ? ' (yours)' : ''), rs.length]
+        rows.push([strat, siteIdent(site) + (site.primary ? ' (subject)' : ' (competitor)'), rs.length]
           .concat(metricKeys.map(k => toDisplay(k, mean(rs.map(r => r.data[k]))))));
       }
     }
@@ -5257,8 +5257,8 @@ function renderReportHTML(m){
       : '') + '</p>' +
     '<h3>Sources</h3><p>Google PageSpeed Insights API v5, which runs Lighthouse on Google\'s infrastructure. URL inventory comes from each site\'s own XML sitemap. Where Google holds Chrome User Experience Report data for a URL it is reported separately and labelled as field data.</p>' +
     '<h3>Scope</h3>' + kvTable([
-      ['Subject', m.c.subject ? m.c.subject.origin : '']]
-      .concat(m.c.multi ? [['Compared against', m.c.competitors.map(s => s.origin).join(', ')]] : [])
+      ['Subject', m.c.subject ? siteIdent(m.c.subject) + ' \u2014 ' + m.c.subject.origin : '']]
+      .concat(m.c.multi ? [['Compared against', m.c.competitors.map(x => siteIdent(x) + ' \u2014 ' + x.origin).join(', ')]] : [])
       .concat([
       ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length) +
         (m.c.multi ? ' on the subject, ' + String(uniq(m.c.allRows.map(r => r.url)).length) + ' in total' : '')],
@@ -5278,7 +5278,7 @@ function renderReportHTML(m){
     tableHTML(['Site','URLs found','Collections','Pages measured','Mean score'],
       m.c.sites.map(s => {
         const rs = m.c.allRows.filter(r => r.site === s.origin);
-        return [s.label + (s.primary ? ' \u2014 subject' : ' \u2014 competitor'), String(s.items.length),
+        return [siteIdent(s) + (s.primary ? ' \u2014 subject' : ' \u2014 competitor'), String(s.items.length),
                 String(s.groups.length), String(rs.length),
                 rs.length ? String(r0(mean(rs.map(r => r.data.perf)))) : 'not measured'];
       }).map(r => r)) +
@@ -5294,7 +5294,7 @@ function renderReportHTML(m){
       tableHTML(['Site','Platform','Also detected','Image delivery','Plugins'],
         m.c.sites.filter(st => m.c.allRows.some(r => r.site === st.origin)).map(st => {
           const k = st.stack || {};
-          return [st.label + (st.primary ? ' (subject)' : ''),
+          return [siteIdent(st) + (st.primary ? ' (subject)' : ''),
                   k.primary ? k.primary.label : 'not identified',
                   alsoDetected(k, packsForSite(m.c.allRows, st.origin)).join(', ') || 'none',
                   (k.imageCdns || []).map(c => c.label).join(', ') || 'no CDN detected',
@@ -5525,8 +5525,8 @@ function coverHTML(meta, m){
     '<h1>' + esc(meta.title) + '</h1>' +
     '<p class="onelinethesis">' + esc(m.thesis) + '</p></div>' +
     '<div class="covermeta">' +
-      [['Subject', m.c.subjectLabel]]
-        .concat(m.c.multi ? [['Compared against', m.c.competitors.map(s => s.label).join(', ')]] : [])
+      [['Subject', siteIdent(m.c.subject)]]
+        .concat(m.c.multi ? [['Compared against', m.c.competitors.map(siteIdent).join(', ')]] : [])
         .concat([
        ['Prepared for', meta.client || 'Internal'],
        ['Prepared by', 'Jake Labate, SEO Consultant'],
@@ -5544,7 +5544,9 @@ function avgOf(rs, fn){ return Object.fromEntries(AVG_KEYS.map(k => [k, fn(rs.ma
 
 function exportRows(){
   return state.results.map(r => ({
-    site: r.siteLabel || '', url: r.url, path: r.path, collection: r.collection, key_page: r.key || '',
+    site: r.siteLabel || '', site_host: (state.sites.find(x => x.origin === r.site) || {}).host || '',
+    site_role: (state.sites.find(x => x.origin === r.site) || {}).primary ? 'subject' : 'competitor',
+    url: r.url, path: r.path, collection: r.collection, key_page: r.key || '',
     strategy: r.strategy, status: r.ok ? 'ok' : 'error', error: r.error || '',
     performance: r.data ? r.data.perf : '', accessibility: r.data ? r.data.a11y : '',
     best_practices: r.data ? r.data.bp : '', seo: r.data ? r.data.seo : '',
@@ -5625,7 +5627,9 @@ $('#dlJson').addEventListener('click', () => {
       bands: CONNECTIONS.map(c => ({ id: c.id, label: c.label, kbps: c.kbps, rtt_ms: c.rttMs, source: c.note }))
     },
     opportunities: oppRows,
-    sites: state.sites.map(s => ({ origin: s.origin, label: s.label, primary: !!s.primary,
+    sites: state.sites.map(s => ({ origin: s.origin, name: s.name || null, host: s.host || hostLabel(s.origin),
+                                   label: s.label, role: s.primary ? 'subject' : 'competitor',
+                                   primary: !!s.primary,
                                    urls_discovered: s.items.length, sitemaps: s.sitemaps })),
     paired_collections: state.compareGroups.map(g => ({
       label: g.label,
@@ -6087,39 +6091,60 @@ function originOf(raw){
   if(!/^https?:\/\//i.test(v)) v = 'https://' + v;
   try{ return new URL(v).origin; }catch(e){ return null; }
 }
-function manualItems(origin){
-  const lines = $('#manual').value.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  return lines.map(l => ({ loc: /^https?:\/\//i.test(l) ? l : (origin || '') + (l.startsWith('/') ? l : '/' + l) }));
-}
-
 /* --- the site input list ------------------------------------------------- */
 const MAX_SITES = 4;
-function siteInputs(){ return Array.from(document.querySelectorAll('#siteList input')); }
-function siteValues(){ return siteInputs().map(i => i.value.trim()).filter(Boolean); }
-function saveSites(){ localStorage.setItem('pss#sites', JSON.stringify(siteValues())); }
+function siteRows(){ return Array.from(document.querySelectorAll('#siteList .siterow')); }
+function siteInputs(){ return Array.from(document.querySelectorAll('#siteList input.url')); }
+/* A site is a name and a URL. The name is what a client recognises; the URL is
+   what gets measured. Reporting leads with the name and keeps the domain
+   beside it, because "Jake Labate" means something to a reader that
+   "jakelabate.com" does not, and the reverse is true for whoever has to
+   reproduce the run. */
+function siteEntries(){
+  return siteRows().map(r => ({
+    name: r.querySelector('input.name').value.trim(),
+    url: r.querySelector('input.url').value.trim()
+  })).filter(x => x.url);
+}
+function siteValues(){ return siteEntries().map(x => x.url); }
+function nameForUrl(url){
+  const e = siteEntries().find(x => x.url === url);
+  return e ? e.name : '';
+}
+function saveSites(){ localStorage.setItem('pss#sites', JSON.stringify(siteEntries())); }
 
-function addSiteRow(value){
+function addSiteRow(value, name){
   const list = $('#siteList');
   if(list.children.length >= MAX_SITES) return;
+  const first = list.children.length === 0;
   const row = el('div','siterow');
   const n = el('span','num', String(list.children.length + 1));
   const role = el('span','role','');
+  const nameInp = document.createElement('input');
+  nameInp.type = 'text'; nameInp.className = 'name'; nameInp.spellcheck = false;
+  nameInp.placeholder = first ? 'Client name' : 'Competitor name';
+  nameInp.setAttribute('aria-label', 'Site name');
+  if(name) nameInp.value = name;
+  nameInp.addEventListener('change', saveSites);
   const inp = document.createElement('input');
-  inp.type = 'url'; inp.spellcheck = false; inp.autocomplete = 'url';
-  inp.placeholder = list.children.length === 0 ? 'https://your-site.com' : 'https://competitor.com';
+  inp.type = 'url'; inp.className = 'url'; inp.spellcheck = false; inp.autocomplete = 'url';
+  inp.placeholder = first ? 'https://your-site.com' : 'https://competitor.com';
+  inp.setAttribute('aria-label', 'Site URL');
   if(value) inp.value = value;
   inp.addEventListener('change', saveSites);
-  const rm = el('button','rm','×');
+  const rm = el('button','rm','\u00d7');
   rm.type = 'button'; rm.title = 'Remove this site';
   rm.addEventListener('click', () => { row.remove(); renumberSites(); saveSites(); });
-  row.appendChild(n); row.appendChild(inp); row.appendChild(role); row.appendChild(rm);
+  row.appendChild(n); row.appendChild(nameInp); row.appendChild(inp);
+  row.appendChild(role); row.appendChild(rm);
   list.appendChild(row);
   renumberSites();
 }
 function renumberSites(){
-  const rows = Array.from(document.querySelectorAll('#siteList .siterow'));
+  const rows = siteRows();
   /* "First in the list" is not a label. The report is about this site and the
-     others exist to be measured against it, so the row says which is which. */
+     others exist to be measured against it, so the row says which is which.
+     The primary row has no remove button: a run needs a site to be about. */
   rows.forEach((r, i) => {
     r.querySelector('.num').textContent = String(i + 1);
     const role = r.querySelector('.role');
@@ -6127,7 +6152,10 @@ function renumberSites(){
       role.textContent = rows.length < 2 ? '' : (i === 0 ? 'Primary' : 'Competitor');
       role.className = 'role' + (i === 0 ? ' primary' : '');
     }
-    r.querySelector('.rm').style.visibility = rows.length > 1 ? 'visible' : 'hidden';
+    const rm = r.querySelector('.rm');
+    rm.style.visibility = i === 0 ? 'hidden' : 'visible';
+    rm.disabled = i === 0;
+    rm.title = i === 0 ? 'The primary site cannot be removed' : 'Remove this site';
   });
   $('#addSite').disabled = rows.length >= MAX_SITES;
   $('#addSite').textContent = rows.length >= MAX_SITES
@@ -6139,13 +6167,19 @@ function renumberSites(){
   try{ saved = JSON.parse(localStorage.getItem('pss#sites') || '[]'); }catch(e){}
   const legacy = localStorage.getItem('pss#site');
   if(!saved.length && legacy) saved = [legacy];
-  if(!saved.length) saved = [''];
-  saved.slice(0, MAX_SITES).forEach(v => addSiteRow(v));
+  if(!saved.length) saved = [{ name:'', url:'' }];
+  /* Older saves are a plain array of URL strings. */
+  saved.slice(0, MAX_SITES).forEach(v =>
+    typeof v === 'string' ? addSiteRow(v, '') : addSiteRow(v.url || '', v.name || ''));
   $('#addSite').addEventListener('click', () => { addSiteRow(''); saveSites(); });
 })();
 
 /* --- discovery ----------------------------------------------------------- */
-async function discoverAll(origins, sweepThrough){
+async function discoverAll(entries, sweepThrough){
+  /* Accepts either the setup form's {name, origin} records or a bare list of
+     origins, so the manual and re-run paths do not need to know the shape. */
+  entries = entries.map(e => typeof e === 'string' ? { name:'', origin: e } : e);
+  const origins = entries.map(e => e.origin);
   const btn = $('#discoverBtn'); btn.disabled = true; btn.textContent = 'Searching…';
   $('#sweepBtn').disabled = true;
   state.cancel = false;
@@ -6156,7 +6190,10 @@ async function discoverAll(origins, sweepThrough){
   const log = $('#discLog'); log.innerHTML = '';
   $('#discSummary').innerHTML = ''; $('#discStat').textContent = 'running';
 
-  const opts = { allowProxy: $('#useProxy').checked, maxChild: clampInt($('#maxChild').value, 1, 100, 30),
+  /* Public proxies are always permitted: a site that blocks direct browser
+     access simply cannot be read otherwise, and refusing to try only produced
+     an empty inventory. Discovery is bounded by the clock, not by a count. */
+  const opts = { allowProxy: true,
                  budgetMs: clampInt($('#budget') ? $('#budget').value : 90, 20, 600, 90) * 1000 };
 
   /* Sites are independent: different hosts, different sitemaps, different
@@ -6195,7 +6232,7 @@ async function discoverAll(origins, sweepThrough){
        transport, and nothing downstream of discovery waits on it, so it runs
        inside the site's own lane rather than after every site has finished. */
     const stack = await detectStack(origin, pane, ctx);
-    perSite[i] = { origin, res, ctx, stack, ms: Date.now() - started };
+    perSite[i] = { origin, name: entries[i].name || '', res, ctx, stack, ms: Date.now() - started };
     logLine(pane, '  done in ' + fmtSecs(Date.now() - started), 'dim');
   });
 
@@ -6207,14 +6244,9 @@ async function discoverAll(origins, sweepThrough){
     const rec = perSite[i];
     if(!rec) continue;
     const { origin, res, ctx, stack } = rec;
+    const siteName = rec.name || '';
 
-    /* The manual list used to be refused on multi-site runs as ambiguous, which
-       meant one competitor behind a WAF killed the comparison with no way back.
-       It is not ambiguous: normalise() keeps only same-host URLs, so each site
-       takes the pasted lines that belong to it and ignores the rest. */
-    const manual = manualItems(origin);
-    const merged = res.urls.concat(manual.map(m => Object.assign({}, m, { source: 'manual' })));
-    const items = normalise(merged, origin);
+    const items = normalise(res.urls, origin);
 
     if(!items.length){
       /* Saying a site published no sitemap when its robots.txt declared one and
@@ -6227,13 +6259,12 @@ async function discoverAll(origins, sweepThrough){
         why = 'could not be reached from the browser. Direct fetch is blocked because the site sends no CORS headers, ' +
               'and every public proxy failed too' + (detail ? ' (' + esc(detail) + ')' : '') +
               '. Sites behind a WAF commonly block the proxies\u2019 datacentre addresses, which no browser-only tool can work around. ' +
-              'Paste its URLs into the manual list under \u201cSampling and run options\u201d and run again: the list now applies per site, ' +
-              'so the other sites in this comparison are unaffected';
+              'Nothing this tool can do from a browser reaches it. Measure it through PageSpeed Insights directly, or drop it from the run';
       } else if(res && res.rootsFound && (res.childFailures || []).length){
         why = 'published a sitemap, but none of its ' + res.childFailures.length +
               ' child sitemaps could be fetched within the ' + Math.round((opts.budgetMs || 90000) / 1000) +
               's budget. The sitemap exists and the proxy is the bottleneck, not the site. ' +
-              'Raise the discovery budget, turn off proxies if the site allows direct access, or paste URLs into the manual list';
+              'Raise the discovery budget and run again';
       } else if(res && res.rootsFound){
         why = 'published a sitemap, but no URLs could be read from it. It may be empty, gzipped, or in a format this cannot parse';
       } else if(ctx && ctx.tp && ctx.solid === false){
@@ -6245,8 +6276,7 @@ async function discoverAll(origins, sweepThrough){
         why = 'refused every request that reached it' + (detail ? ' (' + esc(detail) + ')' : '') +
               '. The proxies connected but the site returned an error rather than a file, which is what a WAF does to ' +
               'datacentre addresses. Its sitemap is probably fine and simply not readable this way. ' +
-              'Paste its URLs into the manual list under \u201cSampling and run options\u201d and run again: the list applies per site, ' +
-              'so the other sites in this comparison are unaffected';
+              'Measure it through PageSpeed Insights directly, or drop it from the run';
       } else {
         why = 'published no sitemap at robots.txt or any of the 22 common paths';
       }
@@ -6262,10 +6292,10 @@ async function discoverAll(origins, sweepThrough){
         ' could not be fetched, so this inventory is incomplete. Sampling proceeded on the ' +
         items.length + ' URLs that were readable.');
     }
-    logLine(panes[i], '  kept ' + items.length + ' unique, same-host, non-asset URLs' +
-      (manual.length ? ' (including ' + manual.length + ' manual)' : ''), 'ok');
+    logLine(panes[i], '  kept ' + items.length + ' unique, same-host, non-asset URLs', 'ok');
     sites.push({
-      origin, label: hostLabel(origin), primary: sites.length === 0,
+      origin, host: hostLabel(origin), name: siteName,
+      label: siteName || hostLabel(origin), primary: sites.length === 0,
       items, groups: [], sitemaps: res.sitemaps, stack,
       discoverMs: rec.ms,
       transport: ctx.tp ? ctx.tp.name : 'direct'
@@ -6283,7 +6313,7 @@ async function discoverAll(origins, sweepThrough){
   if(!sites.length){
     $('#discStat').textContent = 'no URLs';
     $('#discSummary').innerHTML = '<div class="err"><b>Nothing to measure.</b><br>' + notes.join('<br>') +
-      '<br><br>For a single site you can paste URLs into the manual list under “Sampling and run options” and press “Use manual list only”.</div>';
+      '<br><br>Check the URL, raise the discovery budget under “Sampling and run options”, and try again.</div>';
     return;
   }
 
@@ -6336,16 +6366,19 @@ function renderLedger(){
 
 function startFromSetup(sweepThrough){
   $('#setupErr').innerHTML = '';
-  const raw = siteValues();
-  const origins = uniq(raw.map(originOf).filter(Boolean));
-  if(!origins.length){
+  const entries = siteEntries()
+    .map(e => ({ name: e.name, origin: originOf(e.url) }))
+    .filter(e => e.origin);
+  const seen = new Set();
+  const sites = entries.filter(e => !seen.has(e.origin) && seen.add(e.origin));
+  if(!sites.length){
     $('#setupErr').innerHTML = '<div class="err">Enter at least one valid site URL, for example https://example.com</div>';
     return;
   }
   // normalise what is shown back to the user
-  siteInputs().forEach((inp, i) => { if(origins[i]) inp.value = origins[i]; });
+  siteInputs().forEach((inp, i) => { if(sites[i]) inp.value = sites[i].origin; });
   saveSites();
-  discoverAll(origins, sweepThrough);
+  discoverAll(sites, sweepThrough);
 }
 $('#discoverBtn').addEventListener('click', () => startFromSetup(false));
 $('#sweepBtn').addEventListener('click', () => startFromSetup(true));
@@ -6356,23 +6389,6 @@ $('#stopDiscover').addEventListener('click', () => {
   logLine($('#discLog'), 'Stopping. Whatever has been read so far will be used.', 'bad');
 });
 
-$('#manualOnlyBtn').addEventListener('click', () => {
-  const origin = originOf(siteValues()[0]) || originOf(($('#manual').value.split(/\r?\n/)[0] || ''));
-  if(!origin){ $('#setupErr').innerHTML = '<div class="err">Enter a site URL or at least one absolute URL in the manual list.</div>'; return; }
-  const items = normalise(manualItems(origin), origin);
-  if(!items.length){ $('#setupErr').innerHTML = '<div class="err">The manual list is empty or contains no URLs on ' + esc(origin) + '.</div>'; return; }
-  $('#setupErr').innerHTML = '';
-  $('#discCard').classList.add('hidden');
-  state.sites = [{ origin, label: hostLabel(origin), primary: true, items, groups: [], sitemaps: [], transport: 'manual', stack: null }];
-  buildGroupsAndSample();
-  (async () => {
-    const ctx = newCtx($('#useProxy').checked);
-    await probeTransport(origin, $('#useProxy').checked, null, ctx).catch(() => null);
-    const st = await detectStack(origin, null, ctx);
-    state.sites[0].stack = st; renderResults();
-  })();
-  $('#selCard').scrollIntoView({ behavior:'smooth', block:'start' });
-});
 
 $('#reSample').addEventListener('click', resampleForMapping);
 $('#selNone').addEventListener('click', () => { state.selected = new Set(); renderSelection(); });
@@ -6398,7 +6414,9 @@ $('#stopBtn').addEventListener('click', () => { state.cancel = true; $('#stopBtn
   const sites = q.getAll('site').filter(Boolean);
   if(sites.length){
     $('#siteList').innerHTML = '';
-    sites.slice(0, MAX_SITES).forEach(v => addSiteRow(v));
+    /* ?site=… may repeat, and ?name=… pairs positionally with it. */
+    const names = q.getAll('name');
+    sites.slice(0, MAX_SITES).forEach((v, i) => addSiteRow(v, names[i] || ''));
   }
   if(q.get('key')) $('#key').value = q.get('key');
 })();

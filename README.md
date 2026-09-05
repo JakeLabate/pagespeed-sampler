@@ -303,7 +303,15 @@ labels.
 
 ## Subject and competitors
 
-The first site in the list is the **primary** one. The row says so, and so does every
+Each site is entered as a **name and a URL**. The name is what every deliverable leads
+with, so `jakelabate.com` reads as *Jake Labate*; leave it blank and the domain is used.
+Anywhere a site is identified for the record rather than just charted, both appear: the
+cover, the method scope, the inventory, the stack table, the workbook's site comparison,
+and the JSON, which carries `name`, `host` and `role` per site. The CSV gains
+`site_host` and `site_role` columns.
+
+The first site in the list is the **primary** one, and it cannot be removed, because a
+run needs a site to be about. The row says so, and so does every
 deliverable: the cover names it as Subject and the others as Compared against, the
 inventory tags each site subject or competitor, and the method page states in bold that
 every figure, band and finding is about the subject unless a section says otherwise.
@@ -492,6 +500,9 @@ So the runner treats concurrency as something to discover rather than declare:
   At 230/min and 20 s a call that is 76; if Google speeds up to 12 s it is 46, and holding
   76 would just buy 429s. A rolling median of the last 40 successful calls sets the
   target, and the ceiling climbs toward it in steps of at most 1.5x.
+- There is no batching field. Concurrency is derived, halved on clustered errors and
+  climbed back on success, so a number chosen by hand could only be worse than the one
+  the run measures for itself.
 - Opens at the ceiling the **last run settled on**, carried in `localStorage`, instead of
   relearning the same number from 40 on every run.
 - **Halves the ceiling** after 3 clustered errors, down to a floor of 5, then climbs
@@ -525,6 +536,12 @@ falls back to a public CORS proxy (allorigins, codetabs, corsproxy.io, isomorphi
 thingproxy) only when direct access is blocked. It probes once per site to pick a working
 transport instead of paying the fallback chain on every request, racing all six at once
 and preferring direct whenever it works. See **Speed** above for hedging and rotation.
+
+### Public proxies are always on
+
+There is no checkbox. A site that blocks direct browser access cannot be read any other
+way, so refusing to try only produced an empty inventory and a question the operator had
+no basis to answer. Direct fetch is still tried first on every site.
 
 ### Your own proxy
 
