@@ -133,10 +133,6 @@ th{text-align:left;font-weight:620;font-size:11px;text-transform:uppercase;lette
 th.n,td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 td{padding:9px 10px;border-bottom:1px solid var(--grid);vertical-align:middle}
 tbody tr:hover{background:var(--surface-2)}
-th.sortable{cursor:pointer;user-select:none}
-th.sortable:hover{color:var(--ink)}
-th.sortable[data-dir]:after{content:" ↓";color:var(--accent)}
-th.sortable[data-dir="asc"]:after{content:" ↑";color:var(--accent)}
 .tablewrap{overflow-x:auto;border:1px solid var(--grid);border-radius:11px;background:var(--surface)}
 .tablewrap table{min-width:760px}
 .urlcell{max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -186,6 +182,9 @@ th.sortable[data-dir="asc"]:after{content:" ↑";color:var(--accent)}
 .siterow{display:flex;gap:8px;align-items:center;margin-bottom:8px}
 .siterow input{flex:1}
 .siterow .num{width:20px;flex:none;font-size:11px;font-weight:700;color:var(--muted);text-align:center}
+.siterow .role{flex:none;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);min-width:74px;text-align:right}
+.siterow .role.primary{color:var(--accent);font-weight:700}
 .siterow .rm{flex:none;background:none;border:0;color:var(--muted);cursor:pointer;font-size:16px;line-height:1;padding:6px 8px;border-radius:7px}
 .siterow .rm:hover{background:var(--surface-2);color:var(--critical-ink)}
 .site-hd{padding:11px 12px;background:var(--surface-3);font-size:13px;display:flex;align-items:center;gap:8px;
@@ -295,7 +294,7 @@ footer .by{margin-left:auto}
       <label class="f">Sites</label>
       <div id="siteList"></div>
       <button class="btn ghost sm" id="addSite" type="button" style="margin-top:8px">+ Add a site to compare</button>
-      <div class="hint">Domain or any page on the site; the sitemap is looked up from its origin. Add up to four. The first is treated as yours and everything else is measured against it.</div>
+      <div class="hint">Domain or any page on the site; the sitemap is looked up from its origin. Add up to four. <b>The first site is the primary one</b>: the report is about it, and every other site is measured against it as a competitor. To change which is primary, retype them in the order you want.</div>
     </div>
     <div>
       <label class="f" for="key">PageSpeed Insights API key</label>
@@ -401,8 +400,27 @@ footer .by{margin-left:auto}
     </div>
   </div>
   <div class="pillbar" id="selPills"></div>
-  <div id="mapPanel" class="hidden"></div>
   <div class="sel-list" id="selList"></div>
+</section>
+
+<!-- 4. PAGE EQUIVALENTS -->
+<section class="card hidden" id="pairCard">
+  <div class="hd"><span class="step">4</span><h2 class="grow">Page equivalents</h2>
+    <span class="stat" id="pairStat"></span></div>
+  <p class="hint" style="margin:0 0 14px">Sites almost never share URL structure, so a like-for-like comparison
+    has to be told what counts as the same kind of page. Your <b>/case-studies</b> may be their <b>/work</b>.
+    Pairings below were matched automatically by name and by common synonyms; check them, rename them, add
+    your own, or set a site to <b>not comparable</b> to drop it from a row. Only paired collections appear in
+    the like-for-like comparison; everything else is still measured and still reported per site.</p>
+  <div id="mapPanel"></div>
+  <p class="hint" style="margin:14px 0 0">Pairings can be changed after the run. They decide how the
+    like-for-like comparison is grouped, not which pages get measured, so editing one re-renders the
+    comparison without spending any quota.</p>
+</section>
+
+<!-- 5. RUN -->
+<section class="card" id="runCard">
+  <div class="hd"><span class="step" id="runStep">5</span><h2 class="grow">Run</h2></div>
   <div class="btnrow" style="margin-top:16px">
     <button class="btn" id="runBtn" type="button">Run PageSpeed test</button>
     <button class="btn ghost" id="stopBtn" type="button" disabled>Stop</button>
@@ -413,9 +431,9 @@ footer .by{margin-left:auto}
   <div id="runErr"></div>
 </section>
 
-<!-- 4. RESULTS -->
+<!-- 6. RESULTS -->
 <section class="card hidden" id="resCard">
-  <div class="hd"><span class="step">4</span><h2 class="grow">Results</h2>
+  <div class="hd"><span class="step" id="resStep">6</span><h2 class="grow">Results</h2>
     <div class="btnrow">
       <select id="resStrategy" style="width:auto"></select>
       <button class="btn ghost sm" id="dlCsv" type="button">CSV</button>
@@ -1633,9 +1651,18 @@ function mappedCollections(origin){
 
 function renderMapPanel(){
   const panel = $('#mapPanel');
-  if(!multi()){ panel.classList.add('hidden'); panel.innerHTML = ''; return; }
-  panel.classList.remove('hidden');
+  const card = $('#pairCard');
+  const step = n => { const a = $('#runStep'), b = $('#resStep');
+    if(a) a.textContent = String(n); if(b) b.textContent = String(n + 1); };
+  if(!multi()){ if(card) card.classList.add('hidden'); panel.innerHTML = ''; step(4); return; }
+  if(card) card.classList.remove('hidden');
+  step(5);
   panel.innerHTML = '';
+
+  const paired = state.compareGroups.filter(g =>
+    state.sites.filter(s2 => g.map[s2.origin]).length > 1).length;
+  const stat = $('#pairStat');
+  if(stat) stat.textContent = paired + ' of ' + state.compareGroups.length + ' rows compare across sites';
 
   const box = el('div','mapbox');
   const hd = el('div','mh');
@@ -1650,10 +1677,6 @@ function renderMapPanel(){
   hd.appendChild(add);
   box.appendChild(hd);
 
-  const hint = el('div','hint','Paired collections are compared page for page across sites. These were matched automatically by name and by common synonyms, so check them: your /case-studies may be their /work. Set a site to “not comparable” to leave it out of a row.');
-  hint.setAttribute('style','margin:0');
-  box.appendChild(hint);
-
   if(!state.compareGroups.length){
     box.appendChild(el('div','empty','No collections could be paired automatically. Add a pairing to line two up by hand.'));
     panel.appendChild(box); return;
@@ -1663,7 +1686,8 @@ function renderMapPanel(){
   tw.style.overflowX = 'auto';
   const table = document.createElement('table');
   let head = '<thead><tr><th>Comparison group</th>' +
-    state.sites.map(s => '<th>' + esc(s.label) + (s.primary ? ' <span class="tag key">yours</span>' : '') + '</th>').join('') +
+    state.sites.map(s => '<th>' + esc(s.label) +
+      (s.primary ? ' <span class="tag key">primary</span>' : '') + '</th>').join('') +
     '<th></th></tr></thead>';
   table.innerHTML = head + '<tbody></tbody>';
   const tb = table.querySelector('tbody');
@@ -2740,7 +2764,6 @@ async function retryFailures(strategyFilter){
 }
 
 /* ---------------------------------------------------------- results view */
-let sortKey = 'perf', sortDir = 'desc';
 
 const CORE = ['perf','lcp','cls','tbt','ttfb'];
 
@@ -2803,8 +2826,18 @@ function renderResults(){
     if(hasContent(lt)) diag.appendChild(lt);
     if(hasContent(comp)) diag.appendChild(comp);
     add('Diagnostics detail', (els.length ? els.length + ' LCP elements, ' : '') + 'third parties, page weight', diag);
-    add('All data', uniq(okRows.map(r => r.url)).length + ' pages, ' + uniq(okRows.map(r => r.collection)).length + ' collections',
-        (function(){ const d = el('div'); d.appendChild(collectionTable(okRows)); d.appendChild(urlTable(okRows)); return d; })());
+    /* The page-by-page table was 100 rows of numbers nobody reads on screen and
+       it is the first thing that belongs in a spreadsheet. It is still in the
+       JSON, the Excel workbook and the Google Sheet, in full. */
+    add('By collection', uniq(okRows.map(r => r.collection)).length + ' collections',
+        (function(){
+          const d = el('div');
+          d.appendChild(collectionTable(okRows));
+          const n = el('p','hint', 'Every measured page, one row each, is in the CSV, the JSON, the Excel workbook and the Google Sheet. It is left out here because a hundred rows of numbers is a spreadsheet job, not a screen job.');
+          n.setAttribute('style','margin:14px 0 0');
+          d.appendChild(n);
+          return d;
+        })());
     if(panels.children.length) box.appendChild(panels);
   }
   if(failRows.length) box.appendChild(failurePanel(failRows, rows, active));
@@ -3572,46 +3605,6 @@ function collectionTable(rows){
   return wrap;
 }
 
-function urlTable(rows){
-  const wrap = el('div');
-  const h = el('h3','', 'Every measured page');
-  h.setAttribute('style','margin:24px 0 10px');
-  wrap.appendChild(h);
-  const cols = [['perf','Perf'],['lcp','LCP'],['cls','CLS'],['tbt','TBT'],['fcp','FCP'],['ttfb','TTFB'],['si','SI']];
-  const extra = [['a11y','A11y'],['bp','BP'],['seo','SEO']].filter(([k]) => rows.some(r => r.data[k] != null));
-  const all = cols.concat(extra);
-
-  const sorted = rows.slice().sort((a,b) => {
-    const av = a.data[sortKey], bv = b.data[sortKey];
-    if(av == null) return 1; if(bv == null) return -1;
-    return sortDir === 'desc' ? bv - av : av - bv;
-  });
-
-  const tw = el('div','tablewrap');
-  let html = '<table><thead><tr>' + (multi() ? '<th>Site</th>' : '') + '<th>Page</th><th>Collection</th>' +
-    all.map(([k,l]) => '<th class="n sortable" data-k="' + k + '"' + (k===sortKey?' data-dir="'+sortDir+'"':'') + '>' + esc(l) + '</th>').join('') +
-    '</tr></thead><tbody>';
-  for(const r of sorted){
-    html += '<tr' + (multi() && r.site === primarySite().origin ? ' class="primary"' : '') + '>' +
-      (multi() ? '<td>' + esc(r.siteLabel) + '</td>' : '') +
-      '<td class="urlcell"><a href="https://pagespeed.web.dev/analysis?url=' + encodeURIComponent(r.url) +
-      '" target="_blank" rel="noopener" title="' + esc(r.url) + '">' + esc(r.path === '/' ? '/ (home)' : r.path) + '</a>' +
-      (r.key ? '<span class="tag key">' + esc(r.key) + '</span>' : '') + '</td>' +
-      '<td>' + esc(r.collection) + '</td>' +
-      all.map(([k]) => '<td class="n">' + scoreCell(k, r.data[k]) + '</td>').join('') + '</tr>';
-  }
-  html += '</tbody></table>';
-  tw.innerHTML = html;
-  tw.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
-    const k = th.dataset.k;
-    if(k === sortKey) sortDir = sortDir === 'desc' ? 'asc' : 'desc';
-    else { sortKey = k; sortDir = (METRICS[k].higher ? 'desc' : 'asc'); }
-    renderResults();
-  }));
-  wrap.appendChild(tw);
-  return wrap;
-}
-
 function failurePanel(failRows, rows, active){
   const byErr = new Map();
   failRows.forEach(r => {
@@ -3960,7 +3953,16 @@ const pct = (a, b) => b ? Math.round(a / b * 100) : 0;
 
 /* A finding's slot values are computed once so the wording and the evidence
    table can never disagree. */
-function ctx(rows, sites){
+/* `rows` is the subject site's measurements. `allRows` is every site's, and
+   exists only so the comparison rule and the comparison sections can reach the
+   competitors. Every finding, every median and every band in this document is
+   about the subject: pooling a client and its rivals into one median produced
+   figures that described no site at all, and then attributed them to the
+   client on the cover. */
+function ctx(rows, sites, allRows){
+  allRows = allRows || rows;
+  const subject = (sites || []).find(x => x.primary) || (sites || [])[0] || null;
+  const competitors = (sites || []).filter(x => x !== subject);
   const opps = aggregateOpportunities(rows);
   const byId = new Map(opps.map(o => [o.id, o]));
   const lcpEls = aggregateLcpElements(rows);
@@ -3973,14 +3975,24 @@ function ctx(rows, sites){
     if(!collections.has(k)) collections.set(k, []);
     collections.get(k).push(x);
   });
-  const field = aggregateField(rows, sites && sites.length > 1 ? sites : []);
+  const field = aggregateField(allRows, sites && sites.length > 1 ? sites : []);
   const checks = aggregateChecks(rows);
   const redirects = redirectRows(rows);
   const composition = aggregateComposition(rows);
   return {
-    rows, sites, n, opp: id => byId.get(id) || null, opps, lcpEls, tp,
+    rows, allRows, sites, subject, competitors, multi: competitors.length > 0,
+    subjectLabel: subject ? subject.label : 'the site',
+    n, opp: id => byId.get(id) || null, opps, lcpEls, tp,
     field, checks, redirects, composition,
     check: id => checks.filter(c => c.id === id),
+    /* Per-site figures come from allRows: c.rows holds only the subject. */
+    perfBySite(){
+      return (sites || []).map(s2 => {
+        const rs = allRows.filter(x => x.site === s2.origin);
+        return { s: s2, n: rs.length,
+                 perf: mean(rs.map(x => x.data.perf)), lcp: mean(rs.map(x => x.data.lcp)) };
+      }).filter(x => x.perf != null);
+    },
     perf: m('perf'), lcp: m('lcp'), cls: m('cls'), tbt: m('tbt'), ttfb: m('ttfb'), fcp: m('fcp'),
     collections: Array.from(collections).map(([k, rs]) => ({
       name: k, pages: rs.length, perf: central(rs.map(x => x.data.perf)), lcp: central(rs.map(x => x.data.lcp))
@@ -4172,31 +4184,23 @@ const RULES = [
   {
     id: 'competitor-gap',
     when: c => {
-      if(c.sites.length < 2) return false;
-      const prim = c.sites.find(s => s.primary);
-      if(!prim) return false;
-      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)) }))
-                         .filter(x => x.perf != null);
+      if(!c.multi) return false;
+      const byS = c.perfBySite();
       const me = byS.find(x => x.s.primary);
       const best = byS.slice().sort((a, b) => b.perf - a.perf)[0];
       return me && best && best.s !== me.s && (best.perf - me.perf) > 12;
     },
     severity: () => 'moderate', risk: 'low', effort: 'low',
     title: c => {
-      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)) })).filter(x => x.perf != null);
+      const byS = c.perfBySite();
       const me = byS.find(x => x.s.primary);
       const best = byS.slice().sort((a, b) => b.perf - a.perf)[0];
       return best.s.label + ' outperforms ' + me.s.label + ' by ' + r0(best.perf - me.perf) + ' points';
     },
     thesis: () => 'The gap is competitive, not just technical.',
-    evidence: c => {
-      const byS = c.sites.map(s => ({ s, perf: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.perf)),
-                                      lcp: mean(c.rows.filter(x => x.site === s.origin).map(x => x.data.lcp)),
-                                      n: c.rows.filter(x => x.site === s.origin).length }))
-                         .filter(x => x.perf != null).sort((a, b) => b.perf - a.perf);
-      return byS.map(x => [x.s.label + (x.s.primary ? ' (subject)' : ''),
-                           'score ' + r0(x.perf) + ', LCP ' + fmtMs(x.lcp) + ', ' + x.n + ' pages']);
-    },
+    evidence: c => c.perfBySite().sort((a, b) => b.perf - a.perf).map(x =>
+      [x.s.label + (x.s.primary ? ' (subject)' : ' (competitor)'),
+       'score ' + r0(x.perf) + ', LCP ' + fmtMs(x.lcp) + ', ' + x.n + ' pages']),
     why: 'Performance is a relative signal in a competitive set as much as an absolute threshold. A rival meeting the thresholds while this site does not is the version of this argument a stakeholder acts on.',
     fix: () => ['Use the paired-collection comparison to find which template types lose by the widest margin.',
                 'Treat the leading site as the target rather than the 90-point threshold; it proves the number is reachable in this sector.']
@@ -4341,8 +4345,8 @@ const RULES = [
 /* Deterministic: rules are evaluated in declaration order, then sorted by
    severity and, within a severity, back to declaration order. No ties are
    broken by anything that can vary between runs. */
-function runRules(rows, sites){
-  const c = ctx(rows, sites);
+function runRules(rows, sites, allRows){
+  const c = ctx(rows, sites, allRows);
   const fired = [], skipped = [];
   RULES.forEach((rule, i) => {
     let ok = false;
@@ -5037,13 +5041,15 @@ const REPORT_CSS = [
 'text-transform:uppercase;color:var(--muted);margin-bottom:9px}',
 '.eyebrow.light{color:rgba(255,255,255,.62)}',
 '.cover,.page{background:var(--paper);width:210mm;min-height:297mm;margin:0 auto 10mm;padding:24mm 22mm;position:relative}',
-'.cover{background:var(--ink);color:#fff;display:flex;flex-direction:column;justify-content:space-between;padding:26mm 22mm}',
+'.cover{background:var(--ink);color:#fff;display:flex;flex-direction:column;justify-content:space-between;',
+'padding:24mm 22mm;box-sizing:border-box;overflow:hidden}',
 '.cover h1{color:#fff;font-size:32pt;line-height:1.1;margin:0 0 14px;max-width:15ch}',
 '.badge{position:absolute;top:14mm;left:22mm;font-family:"IBM Plex Mono",monospace;font-size:8pt;',
 'letter-spacing:.14em;text-transform:uppercase;color:var(--ink);background:var(--cream);padding:4px 10px;border-radius:3px}',
 '.onelinethesis{color:rgba(255,255,255,.86);font-size:13pt;line-height:1.5;max-width:52ch;margin:0}',
-'.covermeta{border-top:1px solid rgba(255,255,255,.22);padding-top:14px;max-width:78ch}',
-'.mrow{display:flex;gap:16px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.09)}',
+'.covermeta{border-top:1px solid rgba(255,255,255,.22);padding-top:11px;max-width:78ch;flex:none}',
+'.covertop{flex:0 1 auto;min-height:0}',
+'.mrow{display:flex;gap:16px;padding:4px 0;border-bottom:1px solid rgba(255,255,255,.09)}',
 '.mrow:last-child{border-bottom:0}',
 '.mk{font-family:"IBM Plex Mono",monospace;font-size:8.5pt;letter-spacing:.09em;text-transform:uppercase;',
 'color:rgba(255,255,255,.5);width:34mm;flex:none;padding-top:2px}',
@@ -5065,15 +5071,18 @@ const REPORT_CSS = [
 'table{width:100%;border-collapse:collapse;font-size:10pt;margin:0 0 14px}',
 'table.data th{background:var(--ink);color:#fff;text-align:left;font-family:"IBM Plex Mono",monospace;',
 'font-size:8pt;letter-spacing:.08em;text-transform:uppercase;padding:7px 9px;font-weight:500}',
-'table.data td{padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top;overflow-wrap:anywhere}',
-'table.data{table-layout:fixed}',
+'table.data td{padding:6px 9px;border-bottom:1px solid var(--rule);vertical-align:top;',
+'overflow-wrap:break-word;word-break:normal}',
+'table.data th:first-child,table.data td:first-child{white-space:normal}',
+'table.data td.u,table.kv td.u{overflow-wrap:anywhere;word-break:break-all}',
 'table.data tbody tr:nth-child(even) td{background:var(--soft)}',
 'table.kv{font-size:10pt;table-layout:fixed;width:100%}',
 'table.kv th{text-align:left;font-family:"IBM Plex Mono",monospace;font-size:8.5pt;letter-spacing:.05em;',
 'color:var(--ink2);font-weight:500;padding:5px 12px 5px 0;width:36%;vertical-align:top;',
-'border-bottom:1px solid var(--rule);overflow-wrap:anywhere}',
+'border-bottom:1px solid var(--rule);overflow-wrap:break-word;word-break:normal}',
 'table.kv td{padding:5px 0;border-bottom:1px solid var(--rule);vertical-align:top;',
-'overflow-wrap:anywhere;word-break:break-word}',
+'overflow-wrap:break-word;word-break:normal}',
+'table.kv td li{overflow-wrap:anywhere;word-break:break-all}',
 'table.kv td .u{font-family:"IBM Plex Mono",monospace;font-size:8.5pt;color:var(--ink2)}',
 'table.kv td ul{margin:0;padding-left:15px}table.kv td li{margin-bottom:4px}',
 'code{font-family:"IBM Plex Mono",monospace;font-size:9pt;background:var(--soft);padding:1px 5px;border-radius:3px}',
@@ -5125,9 +5134,11 @@ const REPORT_CSS = [
 '@page{size:A4;margin:0}',
 '@media print{body{background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}',
 '.cover,.page{margin:0;box-shadow:none;break-before:page;page-break-before:always;min-height:0;height:auto}',
-'.cover{height:297mm;break-before:auto;page-break-before:auto}',
-'.printbar{display:none!important}',
+'.cover{height:297mm;max-height:297mm;overflow:hidden;break-before:auto;page-break-before:auto;',
+'break-inside:avoid;page-break-inside:avoid;break-after:page;page-break-after:always}',
+'.printbar{display:none!important}body.hasbar{padding-top:0!important}',
 'h2,h3{break-after:avoid;page-break-after:avoid}',
+'p,li{orphans:3;widows:3}',
 'figure.chart,.count,.callout,.thesis{break-inside:avoid;page-break-inside:avoid}',
 'table.data thead{display:table-header-group}',
 'table.data tr{break-inside:avoid;page-break-inside:avoid}',
@@ -5159,8 +5170,8 @@ const SEV_PILL = {
 };
 const LEVEL_PILL = { low:{label:'Low'}, medium:{label:'Medium'}, high:{label:'High'} };
 
-function reportModelFromRules(rows, sites, meta){
-  const { ctx: c, fired, skipped } = runRules(rows, sites);
+function reportModelFromRules(rows, sites, meta, allRows){
+  const { ctx: c, fired, skipped } = runRules(rows, sites, allRows);
   const counts = { critical:0, serious:0, moderate:0, minor:0 };
   fired.forEach(f => { counts[f.severity]++; });
 
@@ -5170,16 +5181,34 @@ function reportModelFromRules(rows, sites, meta){
   /* Titles are full sentences, so the lead finding is appended as its own
      sentence rather than spliced into the clause, which reads as broken English. */
   const leadLine = lead ? ' The largest is the first one listed: ' + lowerFirst(lead.title) + '.' : '';
+  /* "0 findings worth acting on" followed immediately by "the largest is" is a
+     contradiction the reader notices before anything else on the cover. Only
+     critical and serious count as worth acting on, so when none are, the
+     sentence has to say what did fire rather than report a zero. */
+  const grave = counts.critical + counts.serious;
+  const tally = grave > 0
+    ? 'with ' + grave + ' finding' + (grave === 1 ? '' : 's') + ' worth acting on'
+    : fired.length
+      ? 'with ' + fired.length + ' finding' + (fired.length === 1 ? '' : 's') + ', none of them serious'
+      : 'with nothing above the reporting threshold';
+  /* The subject is named rather than called "the site". In a comparison the
+     previous wording attributed a figure pooled across the client and its
+     rivals to a client who was never measured at that number. */
+  const who = c.subjectLabel;
+  const against = c.multi
+    ? ', measured against ' + c.competitors.length + ' competitor' + (c.competitors.length === 1 ? '' : 's')
+    : '';
   const thesis =
     band === 'poor'
-      ? 'Across ' + c.n + ' sampled pages the mean Lighthouse performance score is ' + r0(c.perf) +
+      ? 'Across ' + c.n + ' sampled pages of ' + who + against +
+        ', the median Lighthouse performance score is ' + r0(c.perf) +
         ', which fails Google\'s threshold, and the cause concentrates in ' + fired.length +
         ' finding' + (fired.length === 1 ? '' : 's') + ' rather than being spread thinly.' + leadLine
     : band === 'mid'
-      ? 'The site averages ' + r0(c.perf) + ' across ' + c.n + ' sampled pages, inside the needs-work band rather than failing, with ' +
-        (counts.critical + counts.serious) + ' finding' + ((counts.critical + counts.serious) === 1 ? '' : 's') +
-        ' worth acting on.' + leadLine
-      : 'The site averages ' + r0(c.perf) + ' across ' + c.n + ' sampled pages and meets Google\'s threshold. The findings below are refinements rather than repairs.';
+      ? who + ' scores ' + r0(c.perf) + ' across ' + c.n + ' sampled pages' + against +
+        ', inside the needs-work band rather than failing, ' + tally + '.' + leadLine
+      : who + ' scores ' + r0(c.perf) + ' across ' + c.n + ' sampled pages' + against +
+        ' and meets Google\'s threshold. The findings below are refinements rather than repairs.';
 
   // Roadmap: severity first, effort as the tie-break, with the origin fix
   // pinned ahead of front-end work because it caps the benefit of everything.
@@ -5217,34 +5246,44 @@ function renderReportHTML(m){
 
   sec('Method', 'How these numbers were produced and what they do not cover.',
     '<h3>Context</h3><p>' + (meta.client ? 'Prepared for ' + E(meta.client) + '. ' : '') +
-    'This measures loading performance across a representative sample of ' +
-    (m.c.sites.length > 1 ? m.c.sites.length + ' sites' : E(m.c.sites[0].label)) +
-    ', not every page. Pages are sampled per collection so the figures describe the site as a whole rather than whichever pages happen to be fastest.</p>' +
+    'This measures loading performance across a representative sample of ' + E(m.c.subjectLabel) +
+    ', not every page. Pages are sampled per collection so the figures describe the site as a whole rather than whichever pages happen to be fastest.' +
+    (m.c.multi
+      ? ' ' + E(m.c.competitors.map(s => s.label).join(' and ')) +
+        (m.c.competitors.length === 1 ? ' is' : ' are') +
+        ' measured the same way for comparison. <b>Every figure, band and finding in this document is about ' +
+        E(m.c.subjectLabel) + '</b> unless a section says otherwise; competitor numbers appear only in the sections that compare them.'
+      : '') + '</p>' +
     '<h3>Sources</h3><p>Google PageSpeed Insights API v5, which runs Lighthouse on Google\'s infrastructure. URL inventory comes from each site\'s own XML sitemap. Where Google holds Chrome User Experience Report data for a URL it is reported separately and labelled as field data.</p>' +
     '<h3>Scope</h3>' + kvTable([
-      ['Sites', m.c.sites.map(s => s.origin).join(', ')],
-      ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length)],
+      ['Subject', m.c.subject ? m.c.subject.origin : '']]
+      .concat(m.c.multi ? [['Compared against', m.c.competitors.map(s => s.origin).join(', ')]] : [])
+      .concat([
+      ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length) +
+        (m.c.multi ? ' on the subject, ' + String(uniq(m.c.allRows.map(r => r.url)).length) + ' in total' : '')],
       ['Measurements', String(m.c.rows.length) + ' pages (' + E(meta.strategy) + ')' +
       (m.c.rows[0] && m.c.rows[0].data && m.c.rows[0].data.samples > 1
         ? ', each measured ' + m.c.rows[0].data.samples + ' times and reduced to the median' : ', each measured once')],
     ['Site figures', (CENTRAL.mode === 'mean' ? 'Mean' : 'Median') + ' across the sample'],
       ['Sampling', 'Up to ' + meta.perGroup + ' URLs per collection, ' + meta.totalCap + ' per site maximum'],
       ['Report date', E(meta.date)]
-    ]) +
+    ])) +
     '<h3>Assumptions</h3><p>Lab figures are a single synthetic run per URL per strategy and will vary between runs; treat a difference under roughly five performance points as noise. Sample sizes differ between sites because site sizes differ. Thresholds are Google\'s published Core Web Vitals bands, listed in the rubric.</p>' +
-    '<h3>Connection bands</h3><p>Byte savings are also expressed as the time those bytes take to arrive on four connections: Regular 3G at 700 Kbps, Slow 4G at 1,638 Kbps, Dense 4G at 10,240 Kbps and fast broadband at 51,200 Kbps. The first three are Lighthouse\u2019s own throttling presets, so the figures reconcile with the tool that produced the measurements: Slow 4G is the PageSpeed Insights mobile default and Dense 4G its desktop default. The broadband band is a stated assumption, not a preset. The arithmetic is bytes times eight divided by throughput, which is transfer time and not a page-load simulation: bytes on the critical path give back more than the figure shown because everything behind them starts sooner, and bytes off it can give back less.</p>' +
+    '<h3>Connection bands</h3><p>Byte savings are also given as the time those bytes take to arrive at 700 Kbps (Regular 3G), 1,638 Kbps (Slow 4G), 10,240 Kbps (Dense 4G) and 51,200 Kbps (fast broadband). The first three are Lighthouse\u2019s own throttling presets, so they reconcile with the tool that produced these measurements; the fourth is a stated assumption. The arithmetic is transfer time, not a page-load simulation: bytes on the critical path give back more, bytes off it less.</p>' +
     '<div class="callout"><b>Every statement in this document is generated by a rule.</b> No finding is written by hand or by a language model. Each recommendation names the measured condition that triggered it, and the appendix lists every rule that was evaluated, including those that did not fire.<br><br>' +
-    'Rendering is reproducible: the same measurements and the same report date always produce a byte-identical document. The <em>measurements</em> are not reproducible, because Lighthouse returns different numbers for identical requests. Re-running this audit will produce different figures and may produce a different set of findings. This document describes one measurement, not a fixed property of the site.</div>');
+    'The <em>measurements</em> are not reproducible: Lighthouse returns different numbers for identical requests. Re-running this audit will produce different figures and may produce a different set of findings. This document describes one measurement, not a fixed property of the site.</div>');
 
   sec('Inventory', 'What was discovered and what was measured.',
     tableHTML(['Site','URLs found','Collections','Pages measured','Mean score'],
       m.c.sites.map(s => {
-        const rs = m.c.rows.filter(r => r.site === s.origin);
-        return [s.label + (s.primary ? ' (subject)' : ''), String(s.items.length),
+        const rs = m.c.allRows.filter(r => r.site === s.origin);
+        return [s.label + (s.primary ? ' \u2014 subject' : ' \u2014 competitor'), String(s.items.length),
                 String(s.groups.length), String(rs.length),
                 rs.length ? String(r0(mean(rs.map(r => r.data.perf)))) : 'not measured'];
-      })) +
-    '<h3>By collection</h3>' +
+      }).map(r => r)) +
+    '<h3>' + (m.c.multi ? E(m.c.subjectLabel) + ' by collection' : 'By collection') + '</h3>' +
+    (m.c.multi ? '<p class="muted">Collections belonging to ' + E(m.c.subjectLabel) +
+      ' only. Competitor collections are in the paired comparison, not here.</p>' : '') +
     tableHTML(['Collection','Pages','Mean score','Mean LCP'],
       m.c.collections.map(col => [col.name, String(col.pages), String(r0(col.perf)), fmtMs(col.lcp)])));
 
@@ -5252,11 +5291,11 @@ function renderReportHTML(m){
     sec('Stack', 'What each site is built on, because it changes what the fix actually is.',
       '<p>Detected from each site\'s own homepage markup and from the technology packs Lighthouse returns with every measurement. Where a recommendation below has a platform-specific route, it is stated on the recommendation itself.</p>' +
       tableHTML(['Site','Platform','Also detected','Image delivery','Plugins'],
-        m.c.sites.filter(st => m.c.rows.some(r => r.site === st.origin)).map(st => {
+        m.c.sites.filter(st => m.c.allRows.some(r => r.site === st.origin)).map(st => {
           const k = st.stack || {};
           return [st.label + (st.primary ? ' (subject)' : ''),
                   k.primary ? k.primary.label : 'not identified',
-                  alsoDetected(k, packsForSite(m.c.rows, st.origin)).join(', ') || 'none',
+                  alsoDetected(k, packsForSite(m.c.allRows, st.origin)).join(', ') || 'none',
                   (k.imageCdns || []).map(c => c.label).join(', ') || 'no CDN detected',
                   (k.plugins || []).length ? (k.plugins.length + ': ' + k.plugins.slice(0, 10).join(', ') + (k.plugins.length > 10 ? ' and more' : '')) : 'none detected'];
         })) +
@@ -5270,6 +5309,21 @@ function renderReportHTML(m){
   if(m.c.field.some(f => f.hasOrigin || Object.keys(f.page).length)){
     sec('Real users', 'The measurement Google actually assesses, as distinct from everything else here.',
       '<p>Chrome User Experience Report data: 28 days of real visits on real devices and connections. Page-level figures exist only for URLs with enough traffic, so origin-level is reported separately and the two are never averaged together. Every other number in this document is lab data from a single synthetic run.</p>' +
+      (function(){
+        /* A site absent from this table has no field data, which is a finding
+           about traffic volume rather than about speed. Saying so beats leaving
+           the reader to notice the omission. */
+        const missing = m.c.sites.filter(st => {
+          const f = m.c.field.find(x => x.site.origin === st.origin);
+          return !f || (!f.hasOrigin && !Object.keys(f.page).length);
+        });
+        return missing.length
+          ? '<p class="muted">No Chrome User Experience Report data for ' +
+            E(missing.map(x => x.label).join(', ')) + '. That means too few real visits to report, not that ' +
+            (missing.length === 1 ? 'it is' : 'they are') + ' slow. Lab figures are all that exist for ' +
+            (missing.length === 1 ? 'it' : 'them') + '.</p>'
+          : '';
+      })() +
       tableHTML(['Site','Scope','Coverage','LCP','CLS','INP','TTFB','Verdict'],
         m.c.field.flatMap(f => {
           const rows = [];
@@ -5299,9 +5353,10 @@ function renderReportHTML(m){
 
   sec('Profile', 'Where the sites differ, and what the averages conceal.',
     (function(){
-      const series = radarSeriesFor(m.c.rows, m.c.sites.length > 1 ? m.c.sites : []);
-      const groups = (m.c.sites.length > 1
-        ? m.c.sites.map(st => ({ label: st.label, values: m.c.rows.filter(r => r.site === st.origin).map(r => r.data.perf).filter(v => v != null) }))
+      const series = radarSeriesFor(m.c.allRows, m.c.multi ? m.c.sites : []);
+      const groups = (m.c.multi
+        ? m.c.sites.map(st => ({ label: st.label + (st.primary ? ' (subject)' : ''),
+                                 values: m.c.allRows.filter(r => r.site === st.origin).map(r => r.data.perf).filter(v => v != null) }))
         : [{ label: 'All pages', values: m.c.rows.map(r => r.data.perf).filter(v => v != null) }]).filter(g => g.values.length);
       let out = '';
       if(series.length){
@@ -5469,12 +5524,15 @@ function coverHTML(meta, m){
     '<h1>' + esc(meta.title) + '</h1>' +
     '<p class="onelinethesis">' + esc(m.thesis) + '</p></div>' +
     '<div class="covermeta">' +
-      [['Subject', m.c.sites.map(s => s.label).join(', ')],
+      [['Subject', m.c.subjectLabel]]
+        .concat(m.c.multi ? [['Compared against', m.c.competitors.map(s => s.label).join(', ')]] : [])
+        .concat([
        ['Prepared for', meta.client || 'Internal'],
        ['Prepared by', 'Jake Labate, SEO Consultant'],
        ['Strategy', meta.strategy],
-       ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length)],
-       ['Date', meta.date]].map(([k, v]) =>
+       ['Pages measured', String(uniq(m.c.rows.map(r => r.url)).length) +
+         (m.c.multi ? ' on ' + m.c.subjectLabel : '')],
+       ['Date', meta.date]]).map(([k, v]) =>
         '<div class="mrow"><span class="mk">' + esc(k) + '</span><span class="mv">' + esc(v) + '</span></div>').join('') +
     '</div></section>';
 }
@@ -5963,8 +6021,13 @@ $('#mkSheet').addEventListener('click', async () => {
 function buildDeterministicReport(){
   const strategies = uniq(state.results.map(r => r.strategy));
   const strategy = ($('#resStrategy') && $('#resStrategy').value) || strategies[0];
-  const rows = state.results.filter(r => r.ok && r.strategy === strategy);
-  if(!rows.length) throw new Error('No successful measurements for ' + strategy + ' to report on.');
+  const allRows = state.results.filter(r => r.ok && r.strategy === strategy);
+  if(!allRows.length) throw new Error('No successful measurements for ' + strategy + ' to report on.');
+  /* The subject is the site the document is about. Competitors are context for
+     it, not co-authors of its median. */
+  const subject = state.sites.find(x => x.primary) || state.sites[0];
+  const rows = subject ? allRows.filter(r => r.site === subject.origin) : allRows;
+  if(!rows.length) throw new Error('No successful measurements for ' + (subject ? subject.label : strategy) + ' to report on.');
   const meta = {
     title: reportTitle(),
     client: ($('#clientName').value || '').trim(),
@@ -5973,7 +6036,7 @@ function buildDeterministicReport(){
     perGroup: clampInt($('#perGroup').value, 1, 10, 10),
     totalCap: clampInt($('#totalCap').value, 1, 100, 100)
   };
-  const model = reportModelFromRules(rows, state.sites, meta);
+  const model = reportModelFromRules(rows, state.sites, meta, allRows);
   return { html: renderReportHTML(model), model, meta };
 }
 
@@ -6039,6 +6102,7 @@ function addSiteRow(value){
   if(list.children.length >= MAX_SITES) return;
   const row = el('div','siterow');
   const n = el('span','num', String(list.children.length + 1));
+  const role = el('span','role','');
   const inp = document.createElement('input');
   inp.type = 'url'; inp.spellcheck = false; inp.autocomplete = 'url';
   inp.placeholder = list.children.length === 0 ? 'https://your-site.com' : 'https://competitor.com';
@@ -6047,14 +6111,21 @@ function addSiteRow(value){
   const rm = el('button','rm','×');
   rm.type = 'button'; rm.title = 'Remove this site';
   rm.addEventListener('click', () => { row.remove(); renumberSites(); saveSites(); });
-  row.appendChild(n); row.appendChild(inp); row.appendChild(rm);
+  row.appendChild(n); row.appendChild(inp); row.appendChild(role); row.appendChild(rm);
   list.appendChild(row);
   renumberSites();
 }
 function renumberSites(){
   const rows = Array.from(document.querySelectorAll('#siteList .siterow'));
+  /* "First in the list" is not a label. The report is about this site and the
+     others exist to be measured against it, so the row says which is which. */
   rows.forEach((r, i) => {
     r.querySelector('.num').textContent = String(i + 1);
+    const role = r.querySelector('.role');
+    if(role){
+      role.textContent = rows.length < 2 ? '' : (i === 0 ? 'Primary' : 'Competitor');
+      role.className = 'role' + (i === 0 ? ' primary' : '');
+    }
     r.querySelector('.rm').style.visibility = rows.length > 1 ? 'visible' : 'hidden';
   });
   $('#addSite').disabled = rows.length >= MAX_SITES;

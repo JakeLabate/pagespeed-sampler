@@ -88,7 +88,7 @@ prints these numbers prints that caveat with them.
 
 Where it appears:
 
-- **App**, four columns on the Opportunities table
+- **App**, four columns on the Opportunities table (the page-by-page table is not on screen: a hundred rows of numbers is a spreadsheet job, and it is in the CSV, JSON, Excel and Sheets in full)
 - **Report**, a band strip on every recommendation that removes bytes, plus a Connection bands note in the Method section
 - **Excel and Google Sheets**, four columns on the Opportunities tab, documented on the Method and Glossary tabs
 - **JSON**, a `connection_bands` block describing the model and an `opportunities` array with `seconds_saved_per_page` per band
@@ -300,6 +300,34 @@ omission.
 Set in the house palette: indigo `#191A3E` and `#2B2C63`, teal `#0E8C8B`, cream
 `#F5F0E6`, Space Grotesk headings, IBM Plex Sans body, IBM Plex Mono for eyebrows and
 labels.
+
+## Subject and competitors
+
+The first site in the list is the **primary** one. The row says so, and so does every
+deliverable: the cover names it as Subject and the others as Compared against, the
+inventory tags each site subject or competitor, and the method page states in bold that
+every figure, band and finding is about the subject unless a section says otherwise.
+
+This is not only labelling. The rules engine used to run over every site's measurements
+pooled together, so a two-site audit produced a median belonging to neither site and then
+printed it on the cover as the client's score. Findings are now computed from the
+subject's rows alone. Competitor rows still feed the sections that exist to compare:
+the profile and spread charts, the site comparison, the paired collections, and the
+competitor-gap finding.
+
+The report says "the site averages" only when there is one site. With competitors it
+names the subject and adds "measured against N competitors".
+
+## Page equivalents
+
+Sites almost never share URL structure, so a like-for-like comparison has to be told what
+counts as the same kind of page: your `/case-studies` may be their `/work`. That mapping
+gets its own step in the app rather than a panel buried inside sampling. Pairings are
+proposed automatically from names and a synonym table, and can be renamed, added to, or
+set to "not comparable" per site.
+
+Editing a pairing re-renders the comparison without spending quota, because pairings
+decide how results are grouped, not which pages get measured.
 
 ## Comparing sites
 
