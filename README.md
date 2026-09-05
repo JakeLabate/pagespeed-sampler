@@ -30,6 +30,35 @@ against each other.
    Speed Index, plus a per-collection breakdown, a sortable per-page table, real-user
    CrUX field data where Google has it, and CSV / JSON export.
 
+## Instant read
+
+A PageSpeed call is a page load: Google fetches the page, runs the JavaScript, builds a
+trace and audits it. That is ten to thirty seconds of real compute on their hardware, and
+no batching makes it instant, because the work *is* the page load.
+
+The Chrome UX Report is a lookup. **Instant read** queries it directly for each origin and
+returns in about a second regardless of how many sites are in the list, because there is
+no page load to wait on. It gives:
+
+- The Core Web Vitals verdict, which passes only when LCP, INP **and** CLS are all inside
+  the good band at p75. Two out of three is a fail, which is what a row of nearly-green
+  numbers hides.
+- p75 and the full distribution per metric, so a p75 that just clears the threshold while
+  a third of visits sit in the poor bin is visible as exactly that.
+- 25 collection periods of trend, drawn against the good threshold. Direction is an
+  argument a lab score cannot make: a site that was fine in March and is not now has a
+  cause with a date on it.
+
+What it cannot do is say *why*. Every opportunity, byte saving, connection-band second
+and stack fix comes from Lighthouse and needs the slow lane. **Now run the full audit**
+goes straight there.
+
+Origins with too little traffic return no data, which is a fact about traffic volume
+rather than about speed, and the card says so rather than leaving a gap.
+
+Needs the **Chrome UX Report API** enabled on the same Google Cloud project as the
+PageSpeed key. Same key, no OAuth. Its quota is separate: 150 queries a minute.
+
 ## Opportunities
 
 Every PageSpeed call returns the whole Lighthouse audit set, not just the metrics. The

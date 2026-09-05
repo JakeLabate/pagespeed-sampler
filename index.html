@@ -65,6 +65,36 @@ header.top .grow{flex:1;min-width:0}
 .card > .hd{display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap}
 .card > .hd .grow{flex:1}
 .step{width:22px;height:22px;flex:none;border-radius:6px;background:var(--surface-3);color:var(--ink-2);display:grid;place-items:center;font-size:11px;font-weight:700}
+.stat{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--muted)}
+
+/* instant read */
+.crux{display:grid;gap:12px}
+@media(min-width:820px){.crux{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}}
+.cxcard{border:1px solid var(--grid);border-radius:12px;padding:14px 15px;background:var(--surface-2)}
+.cxcard.subject{border-color:var(--accent);box-shadow:inset 3px 0 0 var(--accent)}
+.cxhd{display:flex;align-items:baseline;gap:9px;margin-bottom:3px;flex-wrap:wrap}
+.cxhd b{font-size:15px}
+.cxhd .role{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--muted)}
+.cxhd .role.p{color:var(--accent)}
+.cxsub{font-size:11px;color:var(--muted);margin-bottom:11px}
+.cxverdict{display:inline-block;font-family:ui-monospace,Menlo,monospace;font-size:10px;letter-spacing:.09em;
+  text-transform:uppercase;padding:3px 9px;border-radius:5px;margin-bottom:11px;font-weight:600}
+.cxverdict.pass{background:rgba(12,163,12,.16);color:#5fd35f}
+.cxverdict.fail{background:rgba(208,59,59,.16);color:#f08585}
+.cxverdict.none{background:var(--surface-3);color:var(--muted)}
+.cxrow{display:grid;grid-template-columns:46px 1fr auto;gap:9px;align-items:center;padding:6px 0;
+  border-top:1px solid var(--grid)}
+.cxrow .k{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--muted)}
+.cxrow .v{font-size:13px;font-weight:640;text-align:right;white-space:nowrap}
+.cxbar{height:7px;border-radius:4px;overflow:hidden;display:flex;background:var(--surface-3)}
+.cxbar i{display:block;height:100%}
+.cxbar .g{background:#0ca30c}.cxbar .n{background:#fab219}.cxbar .p{background:#d03b3b}
+.cxtrend{margin-top:11px;padding-top:10px;border-top:1px solid var(--grid)}
+.cxtrend svg{display:block;width:100%;height:auto}
+.cxlegend{display:flex;gap:12px;flex-wrap:wrap;font-size:10.5px;color:var(--muted);margin-top:9px}
+.cxlegend span{display:inline-flex;align-items:center;gap:5px}
+.cxlegend i{width:9px;height:9px;border-radius:2px;display:inline-block}
 
 label.f{display:block;font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:5px}
 input[type=text],input[type=url],input[type=password],input[type=number],select,textarea{
@@ -323,7 +353,8 @@ footer .by{margin-left:auto}
   </details>
 
   <div class="btnrow" style="margin-top:16px">
-    <button class="btn" id="sweepBtn" type="button">Find pages and run</button>
+    <button class="btn" id="instantBtn" type="button">Instant read</button>
+    <button class="btn ghost sm" id="sweepBtn" type="button">Find pages and run</button>
     <button class="btn ghost sm" id="discoverBtn" type="button">Find sitemaps only</button>
     <button class="btn ghost sm hidden" id="stopDiscover" type="button">Stop searching</button>
   </div>
@@ -349,6 +380,15 @@ footer .by{margin-left:auto}
   </div>
   <div class="pillbar" id="selPills"></div>
   <div class="sel-list" id="selList"></div>
+</section>
+
+<!-- INSTANT READ -->
+<section class="card hidden" id="instantCard">
+  <div class="hd"><span class="step">&#9889;</span><h2 class="grow">Instant read</h2>
+    <span class="stat" id="instantStat"></span>
+    <div class="btnrow"><button class="btn ghost sm" id="instantDeepen" type="button">Now run the full audit</button></div>
+  </div>
+  <div id="instantBody"></div>
 </section>
 
 <!-- 4. PAGE EQUIVALENTS -->
@@ -517,6 +557,114 @@ function fmtSecs(ms){
   if(ms == null || !isFinite(ms)) return '';
   const s = ms / 1000;
   return s < 10 ? s.toFixed(1) + 's' : Math.round(s) + 's';
+}
+
+/* ------------------------------------------------- the instant lane: CrUX
+   A PageSpeed call is a page load: Google fetches the page, runs the
+   JavaScript, builds a trace and audits it, which is ten to thirty seconds of
+   real work on their hardware. Nothing makes that instant.
+
+   The Chrome UX Report is a lookup. One POST, no page load, and it returns the
+   measurement Google actually assesses: twenty-eight days of real visits on
+   real devices. Two sites is two round trips. So the tool has two lanes now,
+   and this is the fast one: it answers "how are these sites doing" in about a
+   second. It cannot answer "why", which is what the Lighthouse lane is for. */
+const CRUX_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord';
+const CRUX_HISTORY_ENDPOINT = 'https://chromeuxreport.googleapis.com/v1/records:queryHistoryRecord';
+
+/* CrUX metric names to the keys used everywhere else in this app. */
+const CRUX_MAP = {
+  largest_contentful_paint: 'lcp',
+  cumulative_layout_shift: 'cls',
+  interaction_to_next_paint: 'inp',
+  first_contentful_paint: 'fcp',
+  experimental_time_to_first_byte: 'ttfb'
+};
+const CRUX_FIELDS = ['lcp','inp','cls','fcp','ttfb'];
+
+/* CLS arrives as a string because it is fractional; everything else is an
+   integer millisecond count. */
+function cruxNum(v){ const n = typeof v === 'string' ? parseFloat(v) : v; return isFinite(n) ? n : null; }
+
+/* The share of real users inside the good band. This is the number the Core Web
+   Vitals assessment is actually computed from, and it is the one a p75 alone
+   hides: a p75 that just clears the threshold while a third of visits are in
+   the poor bin is not a passing experience for that third. */
+function goodShare(hist){
+  if(!Array.isArray(hist) || !hist.length) return null;
+  const d = cruxNum(hist[0].density);
+  return d == null ? null : d;
+}
+function poorShare(hist){
+  if(!Array.isArray(hist) || hist.length < 3) return null;
+  const d = cruxNum(hist[hist.length - 1].density);
+  return d == null ? null : d;
+}
+
+function parseCruxRecord(rec){
+  const out = { metrics: {}, period: null };
+  if(!rec) return out;
+  for(const [cruxName, key] of Object.entries(CRUX_MAP)){
+    const m = rec.metrics && rec.metrics[cruxName];
+    if(!m) continue;
+    out.metrics[key] = {
+      p75: cruxNum(m.percentiles && m.percentiles.p75),
+      good: goodShare(m.histogram),
+      poor: poorShare(m.histogram)
+    };
+  }
+  const cp = rec.collectionPeriod;
+  if(cp && cp.lastDate) out.period = cp.firstDate && cp.lastDate
+    ? isoDate(cp.firstDate) + ' to ' + isoDate(cp.lastDate) : isoDate(cp.lastDate);
+  return out;
+}
+function isoDate(d){
+  if(!d) return '';
+  const p = n => String(n).padStart(2, '0');
+  return d.year + '-' + p(d.month) + '-' + p(d.day);
+}
+
+async function cruxPost(endpoint, body, key){
+  const r = await fetch(endpoint + '?key=' + encodeURIComponent(key), {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  const json = await r.json().catch(() => null);
+  if(r.ok) return json;
+  /* 404 is the documented answer for an origin with too little traffic to
+     report, which is a fact about the site rather than a failure of the call. */
+  const msg = (json && json.error && json.error.message) || ('HTTP ' + r.status);
+  const err = new Error(msg);
+  err.notFound = r.status === 404;
+  throw err;
+}
+
+/* One origin, one form factor, current period plus 25 weeks of history. The two
+   calls are independent, so they go together. */
+async function cruxForOrigin(origin, formFactor, key){
+  const body = { origin, formFactor };
+  const [now, hist] = await Promise.all([
+    cruxPost(CRUX_ENDPOINT, body, key).catch(e => ({ __err: e })),
+    cruxPost(CRUX_HISTORY_ENDPOINT, Object.assign({ collectionPeriodCount: 25 }, body), key)
+      .catch(() => null)
+  ]);
+  if(now && now.__err){
+    if(now.__err.notFound) return { origin, formFactor, hasData: false };
+    throw now.__err;
+  }
+  const parsed = parseCruxRecord(now && now.record);
+  const trend = {};
+  const hrec = hist && hist.record;
+  if(hrec && hrec.metrics){
+    for(const [cruxName, k] of Object.entries(CRUX_MAP)){
+      const m = hrec.metrics[cruxName];
+      const p = m && m.percentilesTimeseries && m.percentilesTimeseries.p75s;
+      if(Array.isArray(p) && p.length) trend[k] = p.map(cruxNum);
+    }
+    if(Array.isArray(hrec.collectionPeriods)) trend.__periods = hrec.collectionPeriods.map(c => isoDate(c.lastDate));
+  }
+  return { origin, formFactor, hasData: Object.keys(parsed.metrics).length > 0,
+           metrics: parsed.metrics, period: parsed.period, trend };
 }
 
 /* --------------------------------------------------------------- fetching */
@@ -6336,6 +6484,151 @@ function renderLedger(){
   node.innerHTML = bits.length ? bits.join('') : '';
   node.className = 'ledger';
 }
+
+/* ------------------------------------------------------------ instant read */
+/* Core Web Vitals passes only when LCP, INP and CLS are all inside the good
+   band at the 75th percentile. Two out of three is a fail, which is exactly the
+   thing a row of green-ish numbers hides. */
+const CWV_CORE = ['lcp','inp','cls'];
+function cwvVerdict(metrics){
+  const vals = CWV_CORE.map(k => metrics[k] && metrics[k].p75);
+  if(vals.some(v => v == null)) return { state:'none', label:'Not assessed', why:'not enough data on one of LCP, INP or CLS' };
+  const failing = CWV_CORE.filter(k => grade(k, metrics[k].p75) !== 'good');
+  return failing.length
+    ? { state:'fail', label:'Fails Core Web Vitals',
+        why:'fails on ' + failing.map(k => METRICS[k].label).join(' and ') }
+    : { state:'pass', label:'Passes Core Web Vitals', why:'LCP, INP and CLS all inside the good band' };
+}
+
+/* A p75 is one number standing in for a distribution. The bar underneath it is
+   the distribution: how many real visits were good, how many were poor. */
+function cruxBar(m){
+  if(!m || m.good == null) return '';
+  const g = Math.max(0, m.good) * 100;
+  const p = Math.max(0, m.poor == null ? 0 : m.poor) * 100;
+  const n = Math.max(0, 100 - g - p);
+  return '<div class="cxbar"><i class="g" style="width:' + g.toFixed(1) + '%"></i>' +
+         '<i class="n" style="width:' + n.toFixed(1) + '%"></i>' +
+         '<i class="p" style="width:' + p.toFixed(1) + '%"></i></div>';
+}
+
+/* Twenty-five weeks of p75, drawn against the good threshold. Direction is the
+   argument a lab score cannot make: a site that was fine in March and is not
+   now has a cause with a date on it. */
+function cruxSpark(series, key, w, h){
+  const pts = (series || []).filter(v => v != null && isFinite(v));
+  if(pts.length < 3) return '';
+  const good = METRICS[key].good;
+  const max = Math.max(good * 1.25, ...pts);
+  const x = i => (i / (pts.length - 1)) * (w - 2) + 1;
+  const y = v => h - 3 - (Math.min(v, max) / max) * (h - 6);
+  const d = pts.map((v, i) => (i ? 'L' : 'M') + x(i).toFixed(1) + ' ' + y(v).toFixed(1)).join(' ');
+  const last = pts[pts.length - 1], first = pts[0];
+  const worse = last > first * 1.05, better = last < first * 0.95;
+  const stroke = grade(key, last) === 'good' ? '#3fb3b2' : (grade(key, last) === 'ni' ? '#fab219' : '#e06060');
+  return '<svg viewBox="0 0 ' + w + ' ' + h + '" role="img" aria-label="' +
+    esc(METRICS[key].label + ' over ' + pts.length + ' collection periods, currently ' + fmt(key, last)) + '">' +
+    '<line x1="1" x2="' + (w - 1) + '" y1="' + y(good).toFixed(1) + '" y2="' + y(good).toFixed(1) +
+      '" stroke="#0ca30c" stroke-width="1" stroke-dasharray="3 3" opacity=".55"/>' +
+    '<path d="' + d + '" fill="none" stroke="' + stroke + '" stroke-width="1.8" ' +
+      'stroke-linejoin="round" stroke-linecap="round"/>' +
+    '<circle cx="' + x(pts.length - 1).toFixed(1) + '" cy="' + y(last).toFixed(1) + '" r="2.6" fill="' + stroke + '"/>' +
+    '</svg>' +
+    '<div class="cxsub" style="margin:4px 0 0">' + esc(METRICS[key].label) + ' over ' + pts.length +
+      ' periods, ' + (worse ? 'getting worse' : better ? 'improving' : 'flat') +
+      '. Dashed line is the good threshold.</div>';
+}
+
+function cruxCardHTML(site, data, primary){
+  const role = primary ? '<span class="role p">Subject</span>' : '<span class="role">Competitor</span>';
+  const head = '<div class="cxhd"><b>' + esc(site.label) + '</b>' + role + '</div>' +
+    '<div class="cxsub">' + esc(site.host || hostLabel(site.origin)) +
+    (data && data.period ? ' \u00b7 ' + esc(data.period) : '') + '</div>';
+  if(!data || !data.hasData){
+    return '<div class="cxcard' + (primary ? ' subject' : '') + '">' + head +
+      '<div class="cxverdict none">No field data</div>' +
+      '<div class="cxsub">Chrome has too few real visits to this origin to report on. That is a statement about ' +
+      'traffic volume, not about speed. The full audit still measures it in the lab.</div></div>';
+  }
+  const v = cwvVerdict(data.metrics);
+  let rows = '';
+  for(const k of CRUX_FIELDS){
+    const m = data.metrics[k];
+    if(!m || m.p75 == null) continue;
+    const core = CWV_CORE.indexOf(k) >= 0;
+    rows += '<div class="cxrow"><span class="k"' + (core ? ' style="color:var(--ink-2);font-weight:600"' : '') + '>' +
+      esc(METRICS[k].label) + '</span>' + cruxBar(m) +
+      '<span class="v" style="color:' + (grade(k, m.p75) === 'good' ? '#5fd35f'
+        : grade(k, m.p75) === 'ni' ? '#e8b04a' : '#f08585') + '">' + esc(fmt(k, m.p75)) +
+      (m.good != null ? ' <span style="color:var(--muted);font-weight:400">' + Math.round(m.good * 100) + '%</span>' : '') +
+      '</span></div>';
+  }
+  const trendKey = CWV_CORE.find(k => (data.trend || {})[k] && data.trend[k].length > 2);
+  const trend = trendKey
+    ? '<div class="cxtrend">' + cruxSpark(data.trend[trendKey], trendKey, 260, 46) + '</div>' : '';
+  return '<div class="cxcard' + (primary ? ' subject' : '') + '">' + head +
+    '<div class="cxverdict ' + v.state + '">' + esc(v.label) + '</div>' +
+    '<div class="cxsub" style="margin:-6px 0 10px">' + esc(v.why) + '</div>' +
+    rows + trend + '</div>';
+}
+
+async function runInstant(){
+  const key = $('#key').value.trim();
+  const entries = siteEntries().map(e => ({ name: e.name, origin: originOf(e.url) })).filter(e => e.origin);
+  const seen = new Set();
+  const sites = entries.filter(e => !seen.has(e.origin) && seen.add(e.origin));
+  $('#setupErr').innerHTML = '';
+  if(!sites.length){
+    $('#setupErr').innerHTML = '<div class="err">Enter at least one valid site URL, for example https://example.com</div>';
+    return;
+  }
+  if(!key){
+    $('#setupErr').innerHTML = '<div class="err">The Chrome UX Report API needs your API key. Add it above, and make sure the ' +
+      '<b>Chrome UX Report API</b> is enabled on the same Google Cloud project as your PageSpeed key.</div>';
+    return;
+  }
+  siteInputs().forEach((inp, i) => { if(sites[i]) inp.value = sites[i].origin; });
+  saveSites();
+
+  const btn = $('#instantBtn'); const was = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Reading…';
+  $('#instantCard').classList.remove('hidden');
+  $('#instantStat').textContent = 'querying ' + sites.length + ' origin' + (sites.length === 1 ? '' : 's');
+  $('#instantBody').innerHTML = '';
+  const t0 = Date.now();
+  try{
+    /* Every origin at once. There is no page load to wait on, so the wall clock
+       is one round trip regardless of how many sites are in the list. */
+    const results = await Promise.all(sites.map(s =>
+      cruxForOrigin(s.origin, 'PHONE', key).catch(e => ({ origin: s.origin, hasData: false, error: e.message }))));
+    const ms = Date.now() - t0;
+    const withData = results.filter(r => r.hasData).length;
+
+    state.instant = { sites, results, ms, at: new Date().toISOString() };
+    const cards = sites.map((s, i) => cruxCardHTML(
+      { label: s.name || hostLabel(s.origin), host: hostLabel(s.origin), origin: s.origin },
+      results[i], i === 0)).join('');
+
+    const failed = results.filter(r => r.error && !r.hasData && !/not found|404/i.test(r.error || ''));
+    $('#instantBody').innerHTML =
+      '<p class="hint" style="margin:0 0 14px">The measurement Google actually assesses: 28 days of real Chrome visits ' +
+      'on real devices and connections, phone form factor, at the origin level. This is a lookup rather than a page load, ' +
+      'which is why it returns in about a second. It says how these sites are doing. It cannot say why, and the ' +
+      'opportunities, byte savings and stack fixes all come from the full audit.</p>' +
+      '<div class="crux">' + cards + '</div>' +
+      (failed.length ? '<div class="err" style="margin-top:14px"><b>Some origins could not be read.</b><br>' +
+        failed.map(f => esc(hostLabel(f.origin)) + ': ' + esc(f.error)).join('<br>') +
+        '<br><br>If this says the API is not enabled, turn on the <b>Chrome UX Report API</b> in the same Google Cloud ' +
+        'project as your PageSpeed key.</div>' : '');
+    $('#instantStat').textContent = withData + ' of ' + sites.length + ' with field data \u00b7 ' + fmtSecs(ms);
+    $('#instantCard').scrollIntoView({ behavior:'smooth', block:'start' });
+  }catch(e){
+    $('#instantBody').innerHTML = '<div class="err">Could not read the Chrome UX Report: ' + esc(e.message) + '</div>';
+    $('#instantStat').textContent = 'failed';
+  }finally{ btn.disabled = false; btn.textContent = was; }
+}
+$('#instantBtn').addEventListener('click', () => { runInstant(); });
+$('#instantDeepen').addEventListener('click', () => startFromSetup(true));
 
 function startFromSetup(sweepThrough){
   $('#setupErr').innerHTML = '';
